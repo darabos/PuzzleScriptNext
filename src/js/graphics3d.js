@@ -25,6 +25,7 @@ let instancedMeshes = {};   // spriteIndex -> THREE.InstancedMesh
 let instanceCounts = {};    // spriteIndex -> current instance count
 let levelGroup = null;      // THREE.Group to hold all level meshes
 let lastLevelId = null;     // Track level identity for cache invalidation
+let lastSpritesRef = null;  // Track sprites array to detect recompilation
 
 // Three-point lighting system
 let keyLight = null;     // Main shadow-casting light (warm)
@@ -691,6 +692,12 @@ function redraw3D() {
     if (currentLevelId !== lastLevelId) {
         clearScene3D();
         lastLevelId = currentLevelId;
+    }
+
+    // Detect recompilation (sprites array reference changes)
+    if (typeof sprites !== 'undefined' && sprites !== lastSpritesRef) {
+        clearScene3D();
+        lastSpritesRef = sprites;
     }
 
     // Calculate visible area (handle flickscreen/zoomscreen)
