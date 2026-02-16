@@ -540,7 +540,18 @@ function redraw3D() {
 
     // Handle text mode - fall back to 2D for menus
     if (textMode) {
+        // Show 2D canvas, hide 3D canvas for text screens
+        const canvas2d = document.getElementById('gameCanvas');
+        const canvas3d = document.getElementById('gameCanvas3D');
+        if (canvas2d) canvas2d.style.display = 'block';
+        if (canvas3d) canvas3d.style.display = 'none';
         return false;  // Let 2D handle text screens
+    } else {
+        // Show 3D canvas, hide 2D canvas for gameplay
+        const canvas2d = document.getElementById('gameCanvas');
+        const canvas3d = document.getElementById('gameCanvas3D');
+        if (canvas2d) canvas2d.style.display = 'none';
+        if (canvas3d) canvas3d.style.display = 'block';
     }
 
     // Mark all cached meshes as not in use; we'll mark them as used when we process them
