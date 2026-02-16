@@ -73,9 +73,9 @@ function init3DRenderer() {
     renderer3d.setSize(container.clientWidth, container.clientHeight);
     renderer3d.setClearColor(0x000000, 1);
 
-    // Enable high-quality shadows
+    // Enable high-quality VSM shadows (Variance Shadow Maps)
     renderer3d.shadowMap.enabled = true;
-    renderer3d.shadowMap.type = THREE.PCFSoftShadowMap;  // Soft shadows
+    renderer3d.shadowMap.type = THREE.VSMShadowMap;  // VSM for smooth soft shadows
     renderer3d.domElement.id = 'gameCanvas3D';
     renderer3d.domElement.style.position = 'absolute';
     renderer3d.domElement.style.top = '0';
@@ -128,7 +128,7 @@ function init3DRenderer() {
     keyLight.position.set(30, 50, 30);
     keyLight.castShadow = true;
 
-    // High-quality shadow settings for key light
+    // VSM shadow settings for key light
     keyLight.shadow.mapSize.width = 2048;
     keyLight.shadow.mapSize.height = 2048;
     keyLight.shadow.camera.near = 1;
@@ -137,8 +137,13 @@ function init3DRenderer() {
     keyLight.shadow.camera.right = 50;
     keyLight.shadow.camera.top = 50;
     keyLight.shadow.camera.bottom = -50;
-    keyLight.shadow.bias = -0.001;
-    keyLight.shadow.normalBias = 0.02;
+
+    // VSM-specific: radius controls shadow softness (blur)
+    keyLight.shadow.radius = 8;  // Soft shadow blur radius
+    keyLight.shadow.blurSamples = 25;  // Quality of blur
+
+    // VSM doesn't need traditional bias, but small values help
+    keyLight.shadow.bias = 0.0001;
 
     scene3d.add(keyLight);
     scene3d.add(keyLight.target);
