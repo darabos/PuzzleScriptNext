@@ -309,11 +309,23 @@ function detectMovements() {
         const oldPositions = oldMap[objectIndex] || [];
         const newPositions = newMap[objectIndex];
         
-        // Simple heuristic: match by proximity
-        // For each new position, find closest old position
+        // First pass: mark all positions that exist in both old and new as "used"
+        // These objects stayed in place and don't need animation
         const usedOld = new Set();
+        const usedNew = new Set();
         
         for (const newPos of newPositions) {
+            if (oldPositions.includes(newPos)) {
+                // Object exists in same position - it didn't move
+                usedOld.add(newPos);
+                usedNew.add(newPos);
+            }
+        }
+        
+        // Second pass: match remaining positions by proximity
+        for (const newPos of newPositions) {
+            if (usedNew.has(newPos)) continue;  // Already matched (stayed in place)
+            
             const newX = (newPos / level.height) | 0;
             const newY = newPos % level.height;
             
