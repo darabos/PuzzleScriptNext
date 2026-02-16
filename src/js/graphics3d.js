@@ -13,14 +13,18 @@ let scene3d = null;
 let camera3d = null;
 let container3d = null;  // The DOM container element
 let cubeGeometry = null;
-let cubeMaterials = {};  // Cache materials by color
 let use3DRenderer = true; // Toggle between 2D and 3D rendering
 let groundPlane = null;  // Ground plane to receive shadows
 
-// Mesh caching for performance - avoid removing/re-adding meshes
-let meshCache = {};      // key -> { mesh, inUse }
-let levelGroup = null;   // THREE.Group to hold all level meshes
-let lastLevelId = null;  // Track level identity for cache invalidation
+// Sprite geometry caching - merged geometry per sprite type
+let spriteGeometries = {};  // spriteIndex -> THREE.BufferGeometry (merged cubes with vertex colors)
+let spriteMaterial = null;  // Shared material using vertex colors
+
+// Instanced mesh system - one InstancedMesh per sprite type
+let instancedMeshes = {};   // spriteIndex -> THREE.InstancedMesh
+let instanceCounts = {};    // spriteIndex -> current instance count
+let levelGroup = null;      // THREE.Group to hold all level meshes
+let lastLevelId = null;     // Track level identity for cache invalidation
 
 // Three-point lighting system
 let keyLight = null;     // Main shadow-casting light (warm)
@@ -118,7 +122,7 @@ function init3DRenderer() {
 
     // Create the scene
     scene3d = new THREE.Scene();
-    
+
     // Create a group to hold all level meshes (for efficient batch operations)
     levelGroup = new THREE.Group();
     scene3d.add(levelGroup);
@@ -181,6 +185,13 @@ function init3DRenderer() {
     // Create reusable cube geometry
     cubeGeometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
 
+    // Create shared material that uses vertex colors
+    spriteMaterial = new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.7,
+        metalness: 0.0
+    });
+
     // Handle window resize
     window.addEventListener('resize', onWindowResize3D, false);
 
@@ -215,51 +226,172 @@ function updateCameraPosition() {
 }
 
 /**
- * Get or create a material for a given color
+ * Get or create a merged geometry for a sprite (all cubes combined with vertex colors)
  */
-function getMaterial(color) {
-    if (!color || color === 'transparent' || color === '#00000000') {
-        return null;
+function getOrCreateSpriteGeometry(spriteIndex) {
+    if (spriteGeometries[spriteIndex]) {
+        return spriteGeometries[spriteIndex];
     }
 
-    // Normalize color
-    const normalizedColor = color.toLowerCase();
+    if (!sprites || !sprites[spriteIndex]) return null;
 
-    if (!cubeMaterials[normalizedColor]) {
-        // Parse the color
-        const threeColor = new THREE.Color(normalizedColor);
-        // Use MeshStandardMaterial for better lighting/shadow response
-        cubeMaterials[normalizedColor] = new THREE.MeshStandardMaterial({
-            color: threeColor,
-            roughness: 0.7,
-            metalness: 0.0
-        });
+    const sprite = sprites[spriteIndex];
+    const spriteData = sprite.dat;
+    const colors = sprite.colors;
+
+    if (!spriteData || !colors) return null;
+
+    const spriteHeight = spriteData.length;
+    const spriteWidth = spriteData[0] ? spriteData[0].length : 0;
+
+    // Count non-transparent pixels to pre-allocate arrays
+    let cubeCount = 0;
+    for (let py = 0; py < spriteHeight; py++) {
+        for (let px = 0; px < spriteWidth; px++) {
+            const colorIndex = spriteData[py][px];
+            if (colorIndex >= 0) {
+                const color = colors[colorIndex];
+                if (color && color !== 'transparent' && color !== '#00000000') {
+                    cubeCount++;
+                }
+            }
+        }
     }
 
-    return cubeMaterials[normalizedColor];
+    if (cubeCount === 0) return null;
+
+    // Create merged geometry using BufferGeometryUtils or manual merging
+    const positions = [];
+    const normals = [];
+    const vertexColors = [];
+    const indices = [];
+
+    // Template cube vertices (centered at origin)
+    const halfSize = CUBE_SIZE / 2;
+    const cubeVerts = [
+        // Front face
+        [-halfSize, -halfSize,  halfSize],
+        [ halfSize, -halfSize,  halfSize],
+        [ halfSize,  halfSize,  halfSize],
+        [-halfSize,  halfSize,  halfSize],
+        // Back face
+        [-halfSize, -halfSize, -halfSize],
+        [-halfSize,  halfSize, -halfSize],
+        [ halfSize,  halfSize, -halfSize],
+        [ halfSize, -halfSize, -halfSize],
+        // Top face
+        [-halfSize,  halfSize, -halfSize],
+        [-halfSize,  halfSize,  halfSize],
+        [ halfSize,  halfSize,  halfSize],
+        [ halfSize,  halfSize, -halfSize],
+        // Bottom face
+        [-halfSize, -halfSize, -halfSize],
+        [ halfSize, -halfSize, -halfSize],
+        [ halfSize, -halfSize,  halfSize],
+        [-halfSize, -halfSize,  halfSize],
+        // Right face
+        [ halfSize, -halfSize, -halfSize],
+        [ halfSize,  halfSize, -halfSize],
+        [ halfSize,  halfSize,  halfSize],
+        [ halfSize, -halfSize,  halfSize],
+        // Left face
+        [-halfSize, -halfSize, -halfSize],
+        [-halfSize, -halfSize,  halfSize],
+        [-halfSize,  halfSize,  halfSize],
+        [-halfSize,  halfSize, -halfSize],
+    ];
+
+    const cubeNormals = [
+        // Front
+        [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1],
+        // Back
+        [0, 0, -1], [0, 0, -1], [0, 0, -1], [0, 0, -1],
+        // Top
+        [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0],
+        // Bottom
+        [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0],
+        // Right
+        [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0],
+        // Left
+        [-1, 0, 0], [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],
+    ];
+
+    const cubeIndices = [
+        0, 1, 2, 0, 2, 3,       // Front
+        4, 5, 6, 4, 6, 7,       // Back
+        8, 9, 10, 8, 10, 11,    // Top
+        12, 13, 14, 12, 14, 15, // Bottom
+        16, 17, 18, 16, 18, 19, // Right
+        20, 21, 22, 20, 22, 23  // Left
+    ];
+
+    let vertexOffset = 0;
+
+    for (let py = 0; py < spriteHeight; py++) {
+        for (let px = 0; px < spriteWidth; px++) {
+            const colorIndex = spriteData[py][px];
+            if (colorIndex < 0) continue;
+
+            const color = colors[colorIndex];
+            if (!color || color === 'transparent' || color === '#00000000') continue;
+
+            // Parse color
+            const threeColor = new THREE.Color(color.toLowerCase());
+
+            // Offset for this cube within the sprite
+            const offsetX = px * CUBE_SIZE;
+            const offsetZ = py * CUBE_SIZE;
+
+            // Add vertices
+            for (let v = 0; v < 24; v++) {
+                positions.push(
+                    cubeVerts[v][0] + offsetX,
+                    cubeVerts[v][1],
+                    cubeVerts[v][2] + offsetZ
+                );
+                normals.push(cubeNormals[v][0], cubeNormals[v][1], cubeNormals[v][2]);
+                vertexColors.push(threeColor.r, threeColor.g, threeColor.b);
+            }
+
+            // Add indices (offset by current vertex count)
+            for (const idx of cubeIndices) {
+                indices.push(idx + vertexOffset);
+            }
+
+            vertexOffset += 24;
+        }
+    }
+
+    // Create BufferGeometry
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(vertexColors, 3));
+    geometry.setIndex(indices);
+
+    spriteGeometries[spriteIndex] = geometry;
+    return geometry;
 }
 
 /**
- * Mark all cached meshes as not in use (called at start of redraw)
+ * Reset instance counts at start of redraw
  */
 function beginRedraw3D() {
-    for (const key in meshCache) {
-        meshCache[key].inUse = false;
+    for (const key in instanceCounts) {
+        instanceCounts[key] = 0;
     }
     animatedMeshes = [];
 }
 
 /**
- * Remove meshes that are no longer in use (called at end of redraw)
+ * Finalize instanced meshes after redraw
  */
 function endRedraw3D() {
-    for (const key in meshCache) {
-        if (!meshCache[key].inUse) {
-            const mesh = meshCache[key].mesh;
-            levelGroup.remove(mesh);
-            // Don't dispose geometry - it's shared
-            delete meshCache[key];
-        }
+    for (const spriteIndex in instancedMeshes) {
+        const mesh = instancedMeshes[spriteIndex];
+        const count = instanceCounts[spriteIndex] || 0;
+        mesh.count = count;
+        mesh.instanceMatrix.needsUpdate = true;
     }
 }
 
@@ -268,13 +400,15 @@ function endRedraw3D() {
  */
 function clearScene3D() {
     if (levelGroup) {
-        // Clear all children at once
         while (levelGroup.children.length > 0) {
             levelGroup.remove(levelGroup.children[0]);
         }
     }
-    meshCache = {};
+    instancedMeshes = {};
+    instanceCounts = {};
     animatedMeshes = [];
+    // Clear sprite geometries when switching games (sprites may have changed)
+    spriteGeometries = {};
 }
 
 /**
@@ -297,13 +431,13 @@ function snapshotLevelState() {
 function buildObjectPositionMap(objects, width, height) {
     const map = {};
     const n_tiles = width * height;
-    
+
     for (let posIndex = 0; posIndex < n_tiles; posIndex++) {
         // Read the cell's object bitmask
         for (let s = 0; s < STRIDE_OBJ; s++) {
             const word = objects[posIndex * STRIDE_OBJ + s];
             if (word === 0) continue;
-            
+
             for (let bit = 0; bit < 32; bit++) {
                 if (word & (1 << bit)) {
                     const objectIndex = s * 32 + bit;
@@ -324,30 +458,30 @@ function buildObjectPositionMap(objects, width, height) {
  */
 function detectMovements() {
     if (!previousLevelState || !level || !level.objects) return [];
-    
+
     const oldMap = buildObjectPositionMap(
-        previousLevelState.objects, 
-        previousLevelState.width, 
+        previousLevelState.objects,
+        previousLevelState.width,
         previousLevelState.height
     );
     const newMap = buildObjectPositionMap(
-        level.objects, 
-        level.width, 
+        level.objects,
+        level.width,
         level.height
     );
-    
+
     const movements = [];
-    
+
     // For each object type, find what moved
     for (const objectIndex in newMap) {
         const oldPositions = oldMap[objectIndex] || [];
         const newPositions = newMap[objectIndex];
-        
+
         // First pass: mark all positions that exist in both old and new as "used"
         // These objects stayed in place and don't need animation
         const usedOld = new Set();
         const usedNew = new Set();
-        
+
         for (const newPos of newPositions) {
             if (oldPositions.includes(newPos)) {
                 // Object exists in same position - it didn't move
@@ -355,30 +489,30 @@ function detectMovements() {
                 usedNew.add(newPos);
             }
         }
-        
+
         // Second pass: match remaining positions by proximity
         for (const newPos of newPositions) {
             if (usedNew.has(newPos)) continue;  // Already matched (stayed in place)
-            
+
             const newX = (newPos / level.height) | 0;
             const newY = newPos % level.height;
-            
+
             let bestOldPos = null;
             let bestDist = Infinity;
-            
+
             for (const oldPos of oldPositions) {
                 if (usedOld.has(oldPos)) continue;
-                
+
                 const oldX = (oldPos / previousLevelState.height) | 0;
                 const oldY = oldPos % previousLevelState.height;
-                
+
                 const dist = Math.abs(newX - oldX) + Math.abs(newY - oldY);
                 if (dist < bestDist && dist > 0 && dist <= 2) {  // Only animate small moves
                     bestDist = dist;
                     bestOldPos = oldPos;
                 }
             }
-            
+
             if (bestOldPos !== null) {
                 usedOld.add(bestOldPos);
                 movements.push({
@@ -389,7 +523,7 @@ function detectMovements() {
             }
         }
     }
-    
+
     return movements;
 }
 
@@ -401,22 +535,28 @@ function animate3D() {
         isAnimating = false;
         return;
     }
-    
+
     const elapsed = performance.now() - animationStartTime;
     const t = Math.min(elapsed / animationDuration, 1);
-    
+
     // Smooth easing function (ease-out cubic)
     const easeT = 1 - Math.pow(1 - t, 3);
-    
-    // Update all animated mesh positions
+
+    // Temporary matrix for instance updates
+    const matrix = new THREE.Matrix4();
+
+    // Update all animated instance positions
     for (const anim of animatedMeshes) {
-        anim.mesh.position.x = anim.startX + (anim.endX - anim.startX) * easeT;
-        anim.mesh.position.z = anim.startZ + (anim.endZ - anim.startZ) * easeT;
+        const x = anim.startX + (anim.endX - anim.startX) * easeT;
+        const z = anim.startZ + (anim.endZ - anim.startZ) * easeT;
+        matrix.setPosition(x, anim.y, z);
+        anim.mesh.setMatrixAt(anim.instanceIndex, matrix);
+        anim.mesh.instanceMatrix.needsUpdate = true;
     }
-    
+
     // Render the scene
     renderer3d.render(scene3d, camera3d);
-    
+
     if (t < 1) {
         animationFrameId = requestAnimationFrame(animate3D);
     } else {
@@ -426,9 +566,9 @@ function animate3D() {
 }
 
 /**
- * Create a 3D representation of a sprite at a given grid position
- * Uses mesh caching to avoid removing/re-adding meshes unnecessarily.
- * @param {number} spriteIndex - Index into spriteimages array
+ * Add a sprite instance at the given grid position.
+ * Uses instanced rendering for performance.
+ * @param {number} spriteIndex - Index into sprites array
  * @param {number} gridX - X position in level grid (0-indexed from visible area)
  * @param {number} gridY - Y position in level grid (0-indexed from visible area)
  * @param {number} layer - Layer (Y height) for multiple objects
@@ -437,18 +577,15 @@ function animate3D() {
  * @param {object} animFrom - Optional {gridX, gridY} for animation start position
  */
 function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleHeight, animFrom) {
-    if (!sprites || !sprites[spriteIndex]) return;
+    const geometry = getOrCreateSpriteGeometry(spriteIndex);
+    if (!geometry) return;
 
     const sprite = sprites[spriteIndex];
     const spriteData = sprite.dat;
-    const colors = sprite.colors;
-
-    if (!spriteData || !colors) return;
-
     const spriteHeight = spriteData.length;
     const spriteWidth = spriteData[0] ? spriteData[0].length : 0;
 
-    // Calculate cell size (sprite dimensions + spacing)
+    // Calculate cell size
     const cellSizeX = spriteWidth * CUBE_SIZE;
     const cellSizeZ = spriteHeight * CUBE_SIZE;
 
@@ -459,75 +596,55 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     const baseX = gridX * cellSizeX - totalWidth / 2;
     const baseZ = gridY * cellSizeZ - totalHeight / 2;
     const baseY = layer * CUBE_SIZE;
-    
-    // Calculate animation start position if provided
-    let startBaseX = baseX;
-    let startBaseZ = baseZ;
+
+    // Get or create the InstancedMesh for this sprite
+    let mesh = instancedMeshes[spriteIndex];
+    if (!mesh) {
+        // Create new InstancedMesh with generous max count
+        const maxInstances = 1000;
+        mesh = new THREE.InstancedMesh(geometry, spriteMaterial, maxInstances);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.count = 0;
+        instancedMeshes[spriteIndex] = mesh;
+        instanceCounts[spriteIndex] = 0;
+        levelGroup.add(mesh);
+    }
+
+    // Get next instance index
+    const instanceIndex = instanceCounts[spriteIndex];
+    instanceCounts[spriteIndex]++;
+
+    // Ensure we don't exceed max instances
+    if (instanceIndex >= mesh.instanceMatrix.count) {
+        console.warn('Max instances exceeded for sprite', spriteIndex);
+        return;
+    }
+
+    // Create transformation matrix for this instance
+    const matrix = new THREE.Matrix4();
+
     if (animFrom) {
-        startBaseX = animFrom.gridX * cellSizeX - totalWidth / 2;
-        startBaseZ = animFrom.gridY * cellSizeZ - totalHeight / 2;
+        // Start at animation origin
+        const startBaseX = animFrom.gridX * cellSizeX - totalWidth / 2;
+        const startBaseZ = animFrom.gridY * cellSizeZ - totalHeight / 2;
+        matrix.setPosition(startBaseX, baseY, startBaseZ);
+
+        // Track for animation
+        animatedMeshes.push({
+            mesh: mesh,
+            instanceIndex: instanceIndex,
+            startX: startBaseX,
+            startZ: startBaseZ,
+            endX: baseX,
+            endZ: baseZ,
+            y: baseY
+        });
+    } else {
+        matrix.setPosition(baseX, baseY, baseZ);
     }
 
-    // Create cubes for each pixel in the sprite
-    for (let py = 0; py < spriteHeight; py++) {
-        for (let px = 0; px < spriteWidth; px++) {
-            const colorIndex = spriteData[py][px];
-
-            if (colorIndex < 0) continue;  // Skip transparent pixels
-
-            const color = colors[colorIndex];
-            const material = getMaterial(color);
-
-            if (!material) continue;  // Skip if no valid material
-
-            // Generate cache key for this cube
-            const cacheKey = `${spriteIndex}_${gridX}_${gridY}_${layer}_${px}_${py}`;
-            
-            // Final position
-            const endX = baseX + px * CUBE_SIZE;
-            const endZ = baseZ + py * CUBE_SIZE;
-            
-            let cube;
-            let cached = meshCache[cacheKey];
-            
-            if (cached) {
-                // Reuse existing mesh
-                cube = cached.mesh;
-                cached.inUse = true;
-                
-                // Update material if it changed
-                if (cube.material !== material) {
-                    cube.material = material;
-                }
-            } else {
-                // Create new mesh
-                cube = new THREE.Mesh(cubeGeometry, material);
-                cube.castShadow = true;
-                cube.receiveShadow = true;
-                levelGroup.add(cube);
-                meshCache[cacheKey] = { mesh: cube, inUse: true };
-            }
-            
-            // If animating, set up animation
-            if (animFrom) {
-                const startX = startBaseX + px * CUBE_SIZE;
-                const startZ = startBaseZ + py * CUBE_SIZE;
-                
-                cube.position.set(startX, baseY, startZ);
-                
-                // Track for animation
-                animatedMeshes.push({
-                    mesh: cube,
-                    startX: startX,
-                    startZ: startZ,
-                    endX: endX,
-                    endZ: endZ
-                });
-            } else {
-                cube.position.set(endX, baseY, endZ);
-            }
-        }
-    }
+    mesh.setMatrixAt(instanceIndex, matrix);
 }
 
 /**
@@ -568,7 +685,7 @@ function redraw3D() {
         renderer3d.render(scene3d, camera3d);
         return true;
     }
-    
+
     // Detect level changes and clear cache when level changes
     const currentLevelId = typeof curlevelTarget !== 'undefined' ? curlevelTarget : null;
     if (currentLevelId !== lastLevelId) {
@@ -658,7 +775,7 @@ function redraw3D() {
 
     // Detect movements for animation
     const movements = detectMovements();
-    
+
     // Build a map of movements: toPosIndex -> {objectIndex, fromX, fromY}
     const movementMap = {};
     for (const m of movements) {
@@ -684,7 +801,7 @@ function redraw3D() {
                     // Check if this object moved here
                     const movementKey = `${posIndex}_${k}`;
                     let animFrom = null;
-                    
+
                     if (movementMap[movementKey]) {
                         const m = movementMap[movementKey];
                         // Convert from absolute coords to visible-area relative coords
@@ -693,14 +810,14 @@ function redraw3D() {
                             gridY: m.fromY - minj
                         };
                     }
-                    
+
                     createSprite3D(k, i - mini, j - minj, layerCounter[cellKey], visibleWidth, visibleHeight, animFrom);
                     layerCounter[cellKey]++;
                 }
             }
         }
     }
-    
+
     // Clear the previous state snapshot
     previousLevelState = null;
 
@@ -716,7 +833,7 @@ function redraw3D() {
         // No animation, just render once
         renderer3d.render(scene3d, camera3d);
     }
-    
+
     return true;
 }
 
