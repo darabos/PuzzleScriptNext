@@ -14,9 +14,13 @@ let camera3d = null;
 let container3d = null;  // The DOM container element
 let cubeGeometry = null;
 let cubeMaterials = {};  // Cache materials by color
-let levelMeshes = [];    // Track all meshes in the current level
 let use3DRenderer = true; // Toggle between 2D and 3D rendering
 let groundPlane = null;  // Ground plane to receive shadows
+
+// Mesh caching for performance - avoid removing/re-adding meshes
+let meshCache = {};      // key -> { mesh, inUse }
+let levelGroup = null;   // THREE.Group to hold all level meshes
+let lastLevelId = null;  // Track level identity for cache invalidation
 
 // Three-point lighting system
 let keyLight = null;     // Main shadow-casting light (warm)
@@ -114,6 +118,10 @@ function init3DRenderer() {
 
     // Create the scene
     scene3d = new THREE.Scene();
+    
+    // Create a group to hold all level meshes (for efficient batch operations)
+    levelGroup = new THREE.Group();
+    scene3d.add(levelGroup);
 
     // Create the camera
     camera3d = new THREE.PerspectiveCamera(
@@ -232,14 +240,40 @@ function getMaterial(color) {
 }
 
 /**
- * Clear all meshes from the scene
+ * Mark all cached meshes as not in use (called at start of redraw)
+ */
+function beginRedraw3D() {
+    for (const key in meshCache) {
+        meshCache[key].inUse = false;
+    }
+    animatedMeshes = [];
+}
+
+/**
+ * Remove meshes that are no longer in use (called at end of redraw)
+ */
+function endRedraw3D() {
+    for (const key in meshCache) {
+        if (!meshCache[key].inUse) {
+            const mesh = meshCache[key].mesh;
+            levelGroup.remove(mesh);
+            // Don't dispose geometry - it's shared
+            delete meshCache[key];
+        }
+    }
+}
+
+/**
+ * Clear all meshes from the scene (for level changes)
  */
 function clearScene3D() {
-    for (const mesh of levelMeshes) {
-        scene3d.remove(mesh);
-        if (mesh.geometry) mesh.geometry.dispose();
+    if (levelGroup) {
+        // Clear all children at once
+        while (levelGroup.children.length > 0) {
+            levelGroup.remove(levelGroup.children[0]);
+        }
     }
-    levelMeshes = [];
+    meshCache = {};
     animatedMeshes = [];
 }
 
@@ -393,6 +427,7 @@ function animate3D() {
 
 /**
  * Create a 3D representation of a sprite at a given grid position
+ * Uses mesh caching to avoid removing/re-adding meshes unnecessarily.
  * @param {number} spriteIndex - Index into spriteimages array
  * @param {number} gridX - X position in level grid (0-indexed from visible area)
  * @param {number} gridY - Y position in level grid (0-indexed from visible area)
@@ -445,17 +480,35 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
 
             if (!material) continue;  // Skip if no valid material
 
-            const cube = new THREE.Mesh(cubeGeometry, material);
-
-            // Enable shadows
-            cube.castShadow = true;
-            cube.receiveShadow = true;
-
+            // Generate cache key for this cube
+            const cacheKey = `${spriteIndex}_${gridX}_${gridY}_${layer}_${px}_${py}`;
+            
             // Final position
             const endX = baseX + px * CUBE_SIZE;
             const endZ = baseZ + py * CUBE_SIZE;
             
-            // If animating, start at the old position
+            let cube;
+            let cached = meshCache[cacheKey];
+            
+            if (cached) {
+                // Reuse existing mesh
+                cube = cached.mesh;
+                cached.inUse = true;
+                
+                // Update material if it changed
+                if (cube.material !== material) {
+                    cube.material = material;
+                }
+            } else {
+                // Create new mesh
+                cube = new THREE.Mesh(cubeGeometry, material);
+                cube.castShadow = true;
+                cube.receiveShadow = true;
+                levelGroup.add(cube);
+                meshCache[cacheKey] = { mesh: cube, inUse: true };
+            }
+            
+            // If animating, set up animation
             if (animFrom) {
                 const startX = startBaseX + px * CUBE_SIZE;
                 const startZ = startBaseZ + py * CUBE_SIZE;
@@ -473,9 +526,6 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
             } else {
                 cube.position.set(endX, baseY, endZ);
             }
-
-            scene3d.add(cube);
-            levelMeshes.push(cube);
         }
     }
 }
@@ -493,8 +543,8 @@ function redraw3D() {
         return false;  // Let 2D handle text screens
     }
 
-    // Clear previous meshes
-    clearScene3D();
+    // Mark all cached meshes as not in use; we'll mark them as used when we process them
+    beginRedraw3D();
 
     // Set background color
     if (state && state.bgcolor) {
@@ -506,6 +556,13 @@ function redraw3D() {
     if (!curlevel || !curlevel.width || !curlevel.height) {
         renderer3d.render(scene3d, camera3d);
         return true;
+    }
+    
+    // Detect level changes and clear cache when level changes
+    const currentLevelId = typeof curlevelTarget !== 'undefined' ? curlevelTarget : null;
+    if (currentLevelId !== lastLevelId) {
+        clearScene3D();
+        lastLevelId = currentLevelId;
     }
 
     // Calculate visible area (handle flickscreen/zoomscreen)
@@ -635,6 +692,9 @@ function redraw3D() {
     
     // Clear the previous state snapshot
     previousLevelState = null;
+
+    // Remove meshes that are no longer needed
+    endRedraw3D();
 
     // Start animation if we have movements
     if (animatedMeshes.length > 0) {
