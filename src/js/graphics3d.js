@@ -18,16 +18,16 @@ let levelMeshes = [];    // Track all meshes in the current level
 let use3DRenderer = true; // Toggle between 2D and 3D rendering
 
 // Camera settings
-const CAMERA_FOV = 30;
+const CAMERA_FOV = 40;
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 1000;
 const CUBE_SIZE = 1;
-const CUBE_SPACING = 0;  // Gap between cubes (0 = touching)
+const CAMERA_DISTANCE = 6;
 
 // Camera position and rotation
-let cameraDistance = 10;
-let cameraAngleX = 1.2;  // Looking down (steeper angle, more top-down view)
-let cameraAngleY = 0.0;   // Slight rotation
+let cameraDistance = CAMERA_DISTANCE;
+let cameraAngleX = 1.2;
+let cameraAngleY = 0.0;
 
 /**
  * Initialize the Three.js renderer, scene, and camera
@@ -214,7 +214,7 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
 
     const baseX = gridX * cellSizeX - totalWidth / 2;
     const baseZ = gridY * cellSizeZ - totalHeight / 2;
-    const baseY = layer * CUBE_SIZE * 0.5;  // Stack layers vertically (half cube offset)
+    const baseY = layer * CUBE_SIZE;
 
     // Create cubes for each pixel in the sprite
     for (let py = 0; py < spriteHeight; py++) {
@@ -306,7 +306,7 @@ function redraw3D() {
     // Update camera to center on visible area
     const visibleWidth = maxi - mini;
     const visibleHeight = maxj - minj;
-    cameraDistance = Math.max(visibleWidth, visibleHeight) * 8;
+    cameraDistance = Math.max(visibleWidth, visibleHeight) * CAMERA_DISTANCE;
     updateCameraPosition();
 
     // Render all objects in the visible area
@@ -368,23 +368,6 @@ function toggle3DRenderer() {
     console.log('Rendering mode: ' + (use3DRenderer ? '3D' : '2D'));
 }
 
-/**
- * Rotate camera with keyboard or mouse
- */
-function rotateCamera3D(deltaX, deltaY) {
-    cameraAngleY += deltaX * 0.01;
-    cameraAngleX = Math.max(-1.5, Math.min(-0.1, cameraAngleX + deltaY * 0.01));
-    updateCameraPosition();
-}
-
-/**
- * Zoom camera
- */
-function zoomCamera3D(delta) {
-    cameraDistance = Math.max(10, Math.min(100, cameraDistance + delta));
-    updateCameraPosition();
-}
-
 // Keyboard shortcuts for camera control
 document.addEventListener('keydown', function(e) {
     // Toggle 3D mode with Ctrl+3 or Cmd+3 (works even without renderer initialized)
@@ -398,35 +381,6 @@ document.addEventListener('keydown', function(e) {
 
     // Only handle camera controls when not in text mode
     if (typeof textMode !== 'undefined' && textMode) return;
-
-    switch(e.key) {
-        case '[':
-            rotateCamera3D(-5, 0);  // Rotate horizontally (yaw)
-            if (typeof redraw === 'function') redraw();
-            break;
-        case ']':
-            rotateCamera3D(5, 0);   // Rotate horizontally (yaw)
-            if (typeof redraw === 'function') redraw();
-            break;
-        case ';':
-            rotateCamera3D(0, -5);  // Tilt up (pitch)
-            if (typeof redraw === 'function') redraw();
-            break;
-        case "'":
-            rotateCamera3D(0, 5);   // Tilt down (pitch)
-            if (typeof redraw === 'function') redraw();
-            break;
-        case '-':
-        case '_':
-            zoomCamera3D(5);
-            if (typeof redraw === 'function') redraw();
-            break;
-        case '=':
-        case '+':
-            zoomCamera3D(-5);
-            if (typeof redraw === 'function') redraw();
-            break;
-    }
 });
 
 // Auto-initialize 3D renderer when DOM is ready
