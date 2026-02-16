@@ -16,6 +16,12 @@ let cubeGeometry = null;
 let cubeMaterials = {};  // Cache materials by color
 let levelMeshes = [];    // Track all meshes in the current level
 let use3DRenderer = true; // Toggle between 2D and 3D rendering
+let groundPlane = null;  // Ground plane to receive shadows
+
+// Three-point lighting system
+let keyLight = null;     // Main shadow-casting light (warm)
+let fillLight = null;    // Soft fill light (cool)
+let backLight = null;    // Rim/back light for edge definition
 
 // Camera settings
 const CAMERA_FOV = 40;
@@ -66,6 +72,10 @@ function init3DRenderer() {
     renderer3d.setPixelRatio(window.devicePixelRatio);
     renderer3d.setSize(container.clientWidth, container.clientHeight);
     renderer3d.setClearColor(0x000000, 1);
+
+    // Enable high-quality shadows
+    renderer3d.shadowMap.enabled = true;
+    renderer3d.shadowMap.type = THREE.PCFSoftShadowMap;  // Soft shadows
     renderer3d.domElement.id = 'gameCanvas3D';
     renderer3d.domElement.style.position = 'absolute';
     renderer3d.domElement.style.top = '0';
@@ -106,13 +116,46 @@ function init3DRenderer() {
     );
     updateCameraPosition();
 
-    // Add lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    // === THREE-POINT LIGHTING SYSTEM ===
+
+    // Ambient light - very low, just to prevent pure black shadows
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.15);
     scene3d.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(10, 20, 15);
-    scene3d.add(directionalLight);
+    // KEY LIGHT - Main light, warm color, casts shadows
+    // Positioned front-right, above the scene
+    keyLight = new THREE.DirectionalLight(0xfffaf0, 1.0);  // Warm white
+    keyLight.position.set(30, 50, 30);
+    keyLight.castShadow = true;
+
+    // High-quality shadow settings for key light
+    keyLight.shadow.mapSize.width = 2048;
+    keyLight.shadow.mapSize.height = 2048;
+    keyLight.shadow.camera.near = 1;
+    keyLight.shadow.camera.far = 200;
+    keyLight.shadow.camera.left = -50;
+    keyLight.shadow.camera.right = 50;
+    keyLight.shadow.camera.top = 50;
+    keyLight.shadow.camera.bottom = -50;
+    keyLight.shadow.bias = -0.001;
+    keyLight.shadow.normalBias = 0.02;
+
+    scene3d.add(keyLight);
+    scene3d.add(keyLight.target);
+
+    // FILL LIGHT - Soft light, cool color, no shadows
+    // Positioned front-left, lower than key light
+    fillLight = new THREE.DirectionalLight(0xe0e8ff, 0.4);  // Cool blue-white
+    fillLight.position.set(-30, 25, 20);
+    fillLight.castShadow = false;  // Fill light doesn't cast shadows
+    scene3d.add(fillLight);
+
+    // BACK LIGHT (Rim Light) - Creates edge definition
+    // Positioned behind and above the scene
+    backLight = new THREE.DirectionalLight(0xfff0e0, 0.6);  // Warm accent
+    backLight.position.set(0, 40, -40);
+    backLight.castShadow = false;  // Back light doesn't cast shadows
+    scene3d.add(backLight);
 
     // Create reusable cube geometry
     cubeGeometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
@@ -164,8 +207,11 @@ function getMaterial(color) {
     if (!cubeMaterials[normalizedColor]) {
         // Parse the color
         const threeColor = new THREE.Color(normalizedColor);
-        cubeMaterials[normalizedColor] = new THREE.MeshLambertMaterial({
-            color: threeColor
+        // Use MeshStandardMaterial for better lighting/shadow response
+        cubeMaterials[normalizedColor] = new THREE.MeshStandardMaterial({
+            color: threeColor,
+            roughness: 0.7,
+            metalness: 0.0
         });
     }
 
@@ -214,7 +260,7 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
 
     const baseX = gridX * cellSizeX - totalWidth / 2;
     const baseZ = gridY * cellSizeZ - totalHeight / 2;
-    const baseY = layer * CUBE_SIZE;
+    const baseY = layer * CUBE_SIZE * 3;
 
     // Create cubes for each pixel in the sprite
     for (let py = 0; py < spriteHeight; py++) {
@@ -229,6 +275,10 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
             if (!material) continue;  // Skip if no valid material
 
             const cube = new THREE.Mesh(cubeGeometry, material);
+
+            // Enable shadows
+            cube.castShadow = true;
+            cube.receiveShadow = true;
 
             // Position the cube
             cube.position.set(
@@ -308,6 +358,48 @@ function redraw3D() {
     const visibleHeight = maxj - minj;
     cameraDistance = Math.max(visibleWidth, visibleHeight) * CAMERA_DISTANCE;
     updateCameraPosition();
+
+    // Update shadow camera to cover the level area
+    if (keyLight) {
+        const shadowSize = Math.max(visibleWidth, visibleHeight) * 6;
+        keyLight.shadow.camera.left = -shadowSize;
+        keyLight.shadow.camera.right = shadowSize;
+        keyLight.shadow.camera.top = shadowSize;
+        keyLight.shadow.camera.bottom = -shadowSize;
+        keyLight.shadow.camera.updateProjectionMatrix();
+
+        // Position key light relative to level center (front-right-above)
+        keyLight.position.set(shadowSize * 0.6, shadowSize * 1.2, shadowSize * 0.6);
+        keyLight.target.position.set(0, 0, 0);
+
+        // Update fill light position (front-left)
+        if (fillLight) {
+            fillLight.position.set(-shadowSize * 0.6, shadowSize * 0.5, shadowSize * 0.4);
+        }
+
+        // Update back light position (behind-above)
+        if (backLight) {
+            backLight.position.set(0, shadowSize * 0.8, -shadowSize * 0.8);
+        }
+    }
+
+    // Create ground plane to receive shadows
+    if (!groundPlane) {
+        const groundGeometry = new THREE.PlaneGeometry(200, 200);
+        // Use MeshStandardMaterial with subtle color for visible ground with shadows
+        const groundMaterial = new THREE.MeshStandardMaterial({
+            color: 0x333333,
+            roughness: 0.9,
+            metalness: 0.0,
+            transparent: true,
+            opacity: 0.6
+        });
+        groundPlane = new THREE.Mesh(groundGeometry, groundMaterial);
+        groundPlane.rotation.x = -Math.PI / 2;  // Lay flat
+        groundPlane.position.y = -0.5;  // Just below the cubes
+        groundPlane.receiveShadow = true;
+        scene3d.add(groundPlane);
+    }
 
     // Render all objects in the visible area
     let layerCounter = {};  // Track layers per cell
