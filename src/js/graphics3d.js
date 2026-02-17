@@ -43,7 +43,7 @@ const CAMERA_FOV = 40;
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 1000;
 const CUBE_SIZE = 1;
-const CAMERA_DISTANCE = 6;
+const CAMERA_DISTANCE = 8;
 
 // Camera position and rotation
 let cameraDistance = CAMERA_DISTANCE;
@@ -283,7 +283,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
     const halfSize = CUBE_SIZE / 2;
     const bevel = CUBE_SIZE * 0.25;  // Bevel size for rounding
-    const uvScale = 0.2;  // Scale factor for UV tiling
+    const uvScale = 0.1;  // Scale factor for UV tiling
 
     // Random rotation angle for this sprite's normal map (to reduce tiling repetition)
     const uvRotation = Math.random() * Math.PI * 2;
@@ -784,20 +784,17 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     if (!geometry) return;
 
     const sprite = objectSprites[spriteIndex];
-    const spriteData = sprite.dat;
-    const spriteHeight = spriteData.length;
-    const spriteWidth = spriteData[0] ? spriteData[0].length : 0;
 
     // Calculate cell size
-    const cellSizeX = spriteWidth * CUBE_SIZE;
-    const cellSizeZ = spriteHeight * CUBE_SIZE;
+    const cellSizeX = 5 * CUBE_SIZE;
+    const cellSizeZ = 5 * CUBE_SIZE;
 
     // Center the level around origin
     const totalWidth = visibleWidth * cellSizeX;
     const totalHeight = visibleHeight * cellSizeZ;
 
     const baseX = gridX * cellSizeX - totalWidth / 2;
-    const baseZ = gridY * cellSizeZ - totalHeight / 2;
+    const baseZ = gridY * cellSizeZ - totalHeight / 2 + (5 - sprite.dat.length);
     const baseY = layer * CUBE_SIZE;
 
     // Get or create the InstancedMesh for this sprite
@@ -936,7 +933,7 @@ function redraw3D() {
     // Update camera to center on visible area
     const visibleWidth = maxi - mini;
     const visibleHeight = maxj - minj;
-    cameraDistance = Math.max(visibleWidth, visibleHeight) * CAMERA_DISTANCE;
+    cameraDistance = Math.max(visibleWidth / camera3d.aspect, visibleHeight) * CAMERA_DISTANCE;
     updateCameraPosition();
 
     // Update shadow camera to cover the level area
