@@ -1002,7 +1002,7 @@ function redraw3D() {
             layerCounter[cellKey] = layerCounter[cellKey] || 0;
 
             for (let k = 0; k < state.objectCount; k++) {
-                if (posMask.get(k) != 0) {
+                if (posMask.get(k) != 0 && getOrCreateSpriteGeometry(k)) {
                     // Check if this object moved here
                     const movementKey = `${posIndex}_${k}`;
                     let animFrom = null;
