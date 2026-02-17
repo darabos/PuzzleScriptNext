@@ -297,15 +297,23 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     const bevel = CUBE_SIZE * 0.25;  // Bevel size for rounding
     const uvScale = 0.2;  // Scale factor for UV tiling
 
+    // Random rotation angle for this sprite's normal map (to reduce tiling repetition)
+    const uvRotation = Math.random() * Math.PI * 2;
+    const uvCos = Math.cos(uvRotation);
+    const uvSin = Math.sin(uvRotation);
+
     let vertexOffset = 0;
 
-    // Helper to add a vertex with UV based on position
+    // Helper to add a vertex with UV based on position (rotated by random angle)
     function addVertex(x, y, z, nx, ny, nz, color) {
         positions.push(x, y, z);
         normals.push(nx, ny, nz);
         vertexColors.push(color.r, color.g, color.b);
         // UV coordinates: use x+y for u, z+y for v (so vertical faces get texture too)
-        uvs.push((x + y) * uvScale, (z + y) * uvScale);
+        // Apply random rotation to reduce visible tiling
+        const u = (x + y) * uvScale;
+        const v = (z + y) * uvScale;
+        uvs.push(u * uvCos - v * uvSin, u * uvSin + v * uvCos);
     }
 
     // Helper to add a triangle
