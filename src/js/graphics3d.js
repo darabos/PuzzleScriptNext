@@ -19,6 +19,7 @@ let groundPlane = null;  // Ground plane to receive shadows
 // Sprite geometry caching - merged geometry per sprite type
 let spriteGeometries = {};  // spriteIndex -> THREE.BufferGeometry (merged cubes with vertex colors)
 let spriteMaterial = null;  // Shared material using vertex colors
+let clayNormalMap = null;   // Normal map texture for clay look
 
 // Instanced mesh system - one InstancedMesh per sprite type
 let instancedMeshes = {};   // spriteIndex -> THREE.InstancedMesh
@@ -186,11 +187,27 @@ function init3DRenderer() {
     // Create reusable cube geometry
     cubeGeometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
 
-    // Create shared material that uses vertex colors
+    // Load clay normal map texture
+    const textureLoader = new THREE.TextureLoader();
+    const NORMAL_SCALE = 1.5;  // Adjust normal map strength for subtle effect
+    clayNormalMap = textureLoader.load('images/clay_normal.jpg', function(texture) {
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        // Update material once texture is loaded
+        if (spriteMaterial) {
+            spriteMaterial.normalMap = texture;
+            spriteMaterial.normalScale = new THREE.Vector2(NORMAL_SCALE, NORMAL_SCALE);
+            spriteMaterial.needsUpdate = true;
+        }
+    });
+
+    // Create shared material that uses vertex colors and normal map
     spriteMaterial = new THREE.MeshStandardMaterial({
         vertexColors: true,
         roughness: 0.7,
-        metalness: 0.0
+        metalness: 0.0,
+        normalMap: clayNormalMap,
+        normalScale: new THREE.Vector2(NORMAL_SCALE, NORMAL_SCALE)
     });
 
     // Handle window resize
@@ -273,18 +290,22 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     const positions = [];
     const normals = [];
     const vertexColors = [];
+    const uvs = [];
     const indices = [];
 
     const halfSize = CUBE_SIZE / 2;
     const bevel = CUBE_SIZE * 0.25;  // Bevel size for rounding
+    const uvScale = 0.2;  // Scale factor for UV tiling
 
     let vertexOffset = 0;
 
-    // Helper to add a vertex
+    // Helper to add a vertex with UV based on position
     function addVertex(x, y, z, nx, ny, nz, color) {
         positions.push(x, y, z);
         normals.push(nx, ny, nz);
         vertexColors.push(color.r, color.g, color.b);
+        // UV coordinates: use x+y for u, z+y for v (so vertical faces get texture too)
+        uvs.push((x + y) * uvScale, (z + y) * uvScale);
     }
 
     // Helper to add a triangle
@@ -552,6 +573,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(vertexColors, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     geometry.setIndex(indices);
 
     spriteGeometries[spriteIndex] = geometry;
