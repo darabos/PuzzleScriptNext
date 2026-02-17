@@ -1424,6 +1424,7 @@ function checkKey(e,justPressed) {
 
             } else {
                 pushInput(inputdir);
+                if (typeof snapshotLevelState === 'function') snapshotLevelState();
                 if (processInput(inputdir)) {
                     redraw();
                 }
@@ -1458,6 +1459,7 @@ function update() {
     if (againing) {
         if (timer>againinterval && messagetext == "") {
         //if (timer>againinterval && messagetext == "" && !isTweening) {
+            if (typeof snapshotLevelState === 'function') snapshotLevelState();
             if (processInput(-1)) {
                 draw = true;
                 keyRepeatTimer=0;
@@ -1515,6 +1517,7 @@ function update() {
         if (autotick>autotickinterval) {
             autotick=0;
             pushInput("tick");
+            if (typeof snapshotLevelState === 'function') snapshotLevelState();
             if (processInput(-1)) {
                 draw = true;
             }

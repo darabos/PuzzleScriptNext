@@ -23,6 +23,14 @@ let keyLight = null;     // Main shadow-casting light (warm)
 let fillLight = null;    // Soft fill light (cool)
 let backLight = null;    // Rim/back light for edge definition
 
+// Animation system
+let previousLevelState = null;  // Snapshot of level.objects before move
+let animationStartTime = 0;     // When current animation started
+let animationDuration = 100;    // Duration in ms for slide animation
+let isAnimating = false;        // Whether an animation is in progress
+let animatedMeshes = [];        // Meshes that are being animated with their start/end positions
+let animationFrameId = null;    // requestAnimationFrame ID
+
 // Camera settings
 const CAMERA_FOV = 40;
 const CAMERA_NEAR = 0.1;
@@ -232,6 +240,143 @@ function clearScene3D() {
         if (mesh.geometry) mesh.geometry.dispose();
     }
     levelMeshes = [];
+    animatedMeshes = [];
+}
+
+/**
+ * Snapshot the current level state before a move happens.
+ * Call this before processInput to enable smooth animation.
+ */
+function snapshotLevelState() {
+    if (!level || !level.objects) return;
+    previousLevelState = {
+        objects: new Int32Array(level.objects),
+        width: level.width,
+        height: level.height
+    };
+}
+
+/**
+ * Build a map of object positions from a level state.
+ * Returns: { objectIndex: [posIndex1, posIndex2, ...], ... }
+ */
+function buildObjectPositionMap(objects, width, height) {
+    const map = {};
+    const n_tiles = width * height;
+    
+    for (let posIndex = 0; posIndex < n_tiles; posIndex++) {
+        // Read the cell's object bitmask
+        for (let s = 0; s < STRIDE_OBJ; s++) {
+            const word = objects[posIndex * STRIDE_OBJ + s];
+            if (word === 0) continue;
+            
+            for (let bit = 0; bit < 32; bit++) {
+                if (word & (1 << bit)) {
+                    const objectIndex = s * 32 + bit;
+                    if (!map[objectIndex]) {
+                        map[objectIndex] = [];
+                    }
+                    map[objectIndex].push(posIndex);
+                }
+            }
+        }
+    }
+    return map;
+}
+
+/**
+ * Detect movements by comparing previous and current level states.
+ * Returns array of: { objectIndex, fromPosIndex, toPosIndex }
+ */
+function detectMovements() {
+    if (!previousLevelState || !level || !level.objects) return [];
+    
+    const oldMap = buildObjectPositionMap(
+        previousLevelState.objects, 
+        previousLevelState.width, 
+        previousLevelState.height
+    );
+    const newMap = buildObjectPositionMap(
+        level.objects, 
+        level.width, 
+        level.height
+    );
+    
+    const movements = [];
+    
+    // For each object type, find what moved
+    for (const objectIndex in newMap) {
+        const oldPositions = oldMap[objectIndex] || [];
+        const newPositions = newMap[objectIndex];
+        
+        // Simple heuristic: match by proximity
+        // For each new position, find closest old position
+        const usedOld = new Set();
+        
+        for (const newPos of newPositions) {
+            const newX = (newPos / level.height) | 0;
+            const newY = newPos % level.height;
+            
+            let bestOldPos = null;
+            let bestDist = Infinity;
+            
+            for (const oldPos of oldPositions) {
+                if (usedOld.has(oldPos)) continue;
+                
+                const oldX = (oldPos / previousLevelState.height) | 0;
+                const oldY = oldPos % previousLevelState.height;
+                
+                const dist = Math.abs(newX - oldX) + Math.abs(newY - oldY);
+                if (dist < bestDist && dist > 0 && dist <= 2) {  // Only animate small moves
+                    bestDist = dist;
+                    bestOldPos = oldPos;
+                }
+            }
+            
+            if (bestOldPos !== null) {
+                usedOld.add(bestOldPos);
+                movements.push({
+                    objectIndex: parseInt(objectIndex),
+                    fromPosIndex: bestOldPos,
+                    toPosIndex: newPos
+                });
+            }
+        }
+    }
+    
+    return movements;
+}
+
+/**
+ * Animation loop for smooth movement transitions
+ */
+function animate3D() {
+    if (!isAnimating || !renderer3d || !scene3d || !camera3d) {
+        isAnimating = false;
+        return;
+    }
+    
+    const elapsed = performance.now() - animationStartTime;
+    const t = Math.min(elapsed / animationDuration, 1);
+    
+    // Smooth easing function (ease-out cubic)
+    const easeT = 1 - Math.pow(1 - t, 3);
+    
+    // Update all animated mesh positions
+    for (const anim of animatedMeshes) {
+        anim.mesh.position.x = anim.startX + (anim.endX - anim.startX) * easeT;
+        anim.mesh.position.z = anim.startZ + (anim.endZ - anim.startZ) * easeT;
+    }
+    
+    // Render the scene
+    renderer3d.render(scene3d, camera3d);
+    
+    if (t < 1) {
+        animationFrameId = requestAnimationFrame(animate3D);
+    } else {
+        isAnimating = false;
+        animatedMeshes = [];
+    }
 }
 
 /**
@@ -242,8 +387,9 @@ function clearScene3D() {
  * @param {number} layer - Layer (Y height) for multiple objects
  * @param {number} visibleWidth - Width of visible area
  * @param {number} visibleHeight - Height of visible area
+ * @param {object} animFrom - Optional {gridX, gridY} for animation start position
  */
-function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleHeight) {
+function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleHeight, animFrom) {
     if (!sprites || !sprites[spriteIndex]) return;
 
     const sprite = sprites[spriteIndex];
@@ -265,7 +411,15 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
 
     const baseX = gridX * cellSizeX - totalWidth / 2;
     const baseZ = gridY * cellSizeZ - totalHeight / 2;
-    const baseY = layer * CUBE_SIZE * 3;
+    const baseY = layer * CUBE_SIZE;
+    
+    // Calculate animation start position if provided
+    let startBaseX = baseX;
+    let startBaseZ = baseZ;
+    if (animFrom) {
+        startBaseX = animFrom.gridX * cellSizeX - totalWidth / 2;
+        startBaseZ = animFrom.gridY * cellSizeZ - totalHeight / 2;
+    }
 
     // Create cubes for each pixel in the sprite
     for (let py = 0; py < spriteHeight; py++) {
@@ -285,12 +439,28 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
             cube.castShadow = true;
             cube.receiveShadow = true;
 
-            // Position the cube
-            cube.position.set(
-                baseX + px * CUBE_SIZE,
-                baseY,
-                baseZ + py * CUBE_SIZE
-            );
+            // Final position
+            const endX = baseX + px * CUBE_SIZE;
+            const endZ = baseZ + py * CUBE_SIZE;
+            
+            // If animating, start at the old position
+            if (animFrom) {
+                const startX = startBaseX + px * CUBE_SIZE;
+                const startZ = startBaseZ + py * CUBE_SIZE;
+                
+                cube.position.set(startX, baseY, startZ);
+                
+                // Track for animation
+                animatedMeshes.push({
+                    mesh: cube,
+                    startX: startX,
+                    startZ: startZ,
+                    endX: endX,
+                    endZ: endZ
+                });
+            } else {
+                cube.position.set(endX, baseY, endZ);
+            }
 
             scene3d.add(cube);
             levelMeshes.push(cube);
@@ -406,6 +576,18 @@ function redraw3D() {
         scene3d.add(groundPlane);
     }
 
+    // Detect movements for animation
+    const movements = detectMovements();
+    
+    // Build a map of movements: toPosIndex -> {objectIndex, fromX, fromY}
+    const movementMap = {};
+    for (const m of movements) {
+        const fromX = (m.fromPosIndex / previousLevelState.height) | 0;
+        const fromY = m.fromPosIndex % previousLevelState.height;
+        const key = `${m.toPosIndex}_${m.objectIndex}`;
+        movementMap[key] = { fromX, fromY };
+    }
+
     // Render all objects in the visible area
     let layerCounter = {};  // Track layers per cell
 
@@ -419,15 +601,39 @@ function redraw3D() {
 
             for (let k = 0; k < state.objectCount; k++) {
                 if (posMask.get(k) != 0) {
-                    createSprite3D(k, i - mini, j - minj, layerCounter[cellKey], visibleWidth, visibleHeight);
+                    // Check if this object moved here
+                    const movementKey = `${posIndex}_${k}`;
+                    let animFrom = null;
+                    
+                    if (movementMap[movementKey]) {
+                        const m = movementMap[movementKey];
+                        // Convert from absolute coords to visible-area relative coords
+                        animFrom = {
+                            gridX: m.fromX - mini,
+                            gridY: m.fromY - minj
+                        };
+                    }
+                    
+                    createSprite3D(k, i - mini, j - minj, layerCounter[cellKey], visibleWidth, visibleHeight, animFrom);
                     layerCounter[cellKey]++;
                 }
             }
         }
     }
+    
+    // Clear the previous state snapshot
+    previousLevelState = null;
 
-    // Render the scene
-    renderer3d.render(scene3d, camera3d);
+    // Start animation if we have movements
+    if (animatedMeshes.length > 0) {
+        isAnimating = true;
+        animationStartTime = performance.now();
+        animate3D();
+    } else {
+        // No animation, just render once
+        renderer3d.render(scene3d, camera3d);
+    }
+    
     return true;
 }
 
