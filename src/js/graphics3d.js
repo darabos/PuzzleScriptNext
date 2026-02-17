@@ -944,14 +944,14 @@ function redraw3D() {
 
     // Update shadow camera to cover the level area
     if (keyLight) {
-        const shadowSize = Math.max(visibleWidth, visibleHeight) * 6;
+        const shadowSize = Math.max(visibleWidth, visibleHeight) * 3;
 
         // SpotLight uses perspective shadow camera - update far plane and distance
-        keyLight.shadow.camera.far = shadowSize * 3;
+        keyLight.shadow.camera.far = shadowSize * 6;
         keyLight.shadow.camera.updateProjectionMatrix();
 
         // Position key light relative to level center (front-right-above)
-        keyLight.position.set(shadowSize * 0.6, shadowSize * 0.6, shadowSize * 0.6);
+        keyLight.position.set(shadowSize * 0.8, shadowSize * 0.6, shadowSize * 0.6);
         keyLight.target.position.set(0, 0, 0);
 
         // Update fill light position (front-left)
