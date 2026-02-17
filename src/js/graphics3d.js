@@ -101,12 +101,6 @@ function init3DRenderer() {
     renderer3d.domElement.style.height = '100%';
     renderer3d.domElement.style.touchAction = 'none';
     renderer3d.domElement.tabIndex = 1;  // Make focusable
-
-    // Hide the 2D canvas and add the 3D canvas
-    const canvas2d = document.getElementById('gameCanvas');
-    if (canvas2d) {
-        canvas2d.style.display = 'none';
-    }
     container.appendChild(renderer3d.domElement);
 
     // Add event listeners to track focus for input handling
@@ -177,27 +171,33 @@ function init3DRenderer() {
     // Create reusable cube geometry
     cubeGeometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
 
-    // Load clay normal map texture
+    // Load clay normal map texture (optional - works without it for standalone export)
     const textureLoader = new THREE.TextureLoader();
     const NORMAL_SCALE = 0.5;  // Adjust normal map strength for subtle effect
-    clayNormalMap = textureLoader.load('images/clay_normal.jpg', function(texture) {
-        texture.wrapS = THREE.RepeatWrapping;
-        texture.wrapT = THREE.RepeatWrapping;
-        // Update material once texture is loaded
-        if (spriteMaterial) {
-            spriteMaterial.normalMap = texture;
-            spriteMaterial.normalScale = new THREE.Vector2(NORMAL_SCALE, NORMAL_SCALE);
-            spriteMaterial.needsUpdate = true;
+    clayNormalMap = textureLoader.load('images/clay_normal.jpg',
+        function(texture) {
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            // Update material once texture is loaded
+            if (spriteMaterial) {
+                spriteMaterial.normalMap = texture;
+                spriteMaterial.normalScale = new THREE.Vector2(NORMAL_SCALE, NORMAL_SCALE);
+                spriteMaterial.needsUpdate = true;
+            }
+        },
+        undefined,  // onProgress
+        function(error) {
+            // Normal map not available (e.g., standalone export) - continue without it
+            console.log('Normal map not available, using flat shading');
+            clayNormalMap = null;
         }
-    });
+    );
 
-    // Create shared material that uses vertex colors and normal map
+    // Create shared material that uses vertex colors (normal map added when loaded)
     spriteMaterial = new THREE.MeshStandardMaterial({
         vertexColors: true,
         roughness: 0.7,
-        metalness: 0.0,
-        normalMap: clayNormalMap,
-        normalScale: new THREE.Vector2(NORMAL_SCALE, NORMAL_SCALE)
+        metalness: 0.0
     });
 
     // Handle window resize
