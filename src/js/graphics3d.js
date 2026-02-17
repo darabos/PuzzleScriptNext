@@ -337,17 +337,20 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             const bevelBack = !hasBack;
 
             // Build the voxel geometry with bevels
-            // We'll build the top face with beveled corners/edges, then extrude down
+            // We'll build the voxel with beveled edges:
+            // - Inner top face (inset, at full height)
+            // - Top bevel strip (angled faces from inner edge down to outer edge)
+            // - Vertical sides (outer perimeter)
+            // - Bottom bevel strip (angled faces from outer edge up to inner edge)
+            // - Inner bottom face (inset, at full depth)
 
-            // Top face vertices - start with corners and work around
-            // Corner positions with bevels applied
-            const topY = halfSize;
-            const botY = -halfSize;
+            // Y coordinates for the geometry
+            const innerTopY = halfSize;              // Top face stays at full height
+            const outerTopY = halfSize - bevel;      // Outer edge is lowered by bevel
+            const outerBotY = -halfSize + bevel;     // Outer bottom edge is raised by bevel
+            const innerBotY = -halfSize;             // Bottom face at full depth
 
-            // Define the 8 potential corner positions on top face
-            // Without bevel: corners at (-halfSize, halfSize, -halfSize), etc.
-            // With bevel: corners are chamfered inward
-
+            // Define corner positions
             // Back-left corner (-X, -Z)
             let blX = -halfSize + offsetX;
             let blZ = -halfSize + offsetZ;
@@ -372,92 +375,174 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             let flBevelX = bevelLeft ? bevel : 0;
             let flBevelZ = bevelFront ? -bevel : 0;
 
-            // ===== TOP FACE =====
-            // Build top face with potential corner cuts
-            // We go around the perimeter counter-clockwise: back-left → back-right → front-right → front-left
-            // At each chamfered corner, add incoming edge vertex first, then outgoing edge vertex
+            // ===== BUILD INNER PERIMETER (top face outline, inset by bevel) =====
+            let innerVerts = [];
 
-            let topVerts = [];
-
-            // Back-left corner: arrives from left edge, departs to back edge
+            // Back-left corner
             if (cornerBackLeft && (bevelLeft || bevelBack)) {
-                console.log('Chamfering back-left corner at sprite', spriteIndex, 'px', px, 'py', py);
-                // Chamfered corner - add two vertices (no original corner!)
-                if (bevelLeft) topVerts.push([blX + blBevelX, topY, blZ + blBevelZ + bevel]);      // left edge vertex
-                if (bevelBack) topVerts.push([blX + blBevelX + bevel, topY, blZ + blBevelZ]);      // back edge vertex
+                if (bevelLeft) innerVerts.push([blX + blBevelX, blZ + blBevelZ + bevel]);
+                if (bevelBack) innerVerts.push([blX + blBevelX + bevel, blZ + blBevelZ]);
             } else {
-                topVerts.push([blX + blBevelX, topY, blZ + blBevelZ]);
+                innerVerts.push([blX + blBevelX, blZ + blBevelZ]);
             }
 
-            // Back-right corner: arrives from back edge, departs to right edge
+            // Back-right corner
             if (cornerBackRight && (bevelRight || bevelBack)) {
-                if (bevelBack) topVerts.push([brX + brBevelX - bevel, topY, brZ + brBevelZ]);      // back edge vertex
-                if (bevelRight) topVerts.push([brX + brBevelX, topY, brZ + brBevelZ + bevel]);     // right edge vertex
+                if (bevelBack) innerVerts.push([brX + brBevelX - bevel, brZ + brBevelZ]);
+                if (bevelRight) innerVerts.push([brX + brBevelX, brZ + brBevelZ + bevel]);
             } else {
-                topVerts.push([brX + brBevelX, topY, brZ + brBevelZ]);
+                innerVerts.push([brX + brBevelX, brZ + brBevelZ]);
             }
 
-            // Front-right corner: arrives from right edge, departs to front edge
+            // Front-right corner
             if (cornerFrontRight && (bevelRight || bevelFront)) {
-                if (bevelRight) topVerts.push([frX + frBevelX, topY, frZ + frBevelZ - bevel]);     // right edge vertex
-                if (bevelFront) topVerts.push([frX + frBevelX - bevel, topY, frZ + frBevelZ]);     // front edge vertex
+                if (bevelRight) innerVerts.push([frX + frBevelX, frZ + frBevelZ - bevel]);
+                if (bevelFront) innerVerts.push([frX + frBevelX - bevel, frZ + frBevelZ]);
             } else {
-                topVerts.push([frX + frBevelX, topY, frZ + frBevelZ]);
+                innerVerts.push([frX + frBevelX, frZ + frBevelZ]);
             }
 
-            // Front-left corner: arrives from front edge, departs to left edge
+            // Front-left corner
             if (cornerFrontLeft && (bevelLeft || bevelFront)) {
-                if (bevelFront) topVerts.push([flX + flBevelX + bevel, topY, flZ + flBevelZ]);     // front edge vertex
-                if (bevelLeft) topVerts.push([flX + flBevelX, topY, flZ + flBevelZ - bevel]);      // left edge vertex
+                if (bevelFront) innerVerts.push([flX + flBevelX + bevel, flZ + flBevelZ]);
+                if (bevelLeft) innerVerts.push([flX + flBevelX, flZ + flBevelZ - bevel]);
             } else {
-                topVerts.push([flX + flBevelX, topY, flZ + flBevelZ]);
+                innerVerts.push([flX + flBevelX, flZ + flBevelZ]);
             }
 
-            // Add top face vertices and triangulate as a fan from first vertex
-            const topStartIdx = positions.length / 3;
-            for (const v of topVerts) {
-                addVertex(v[0], v[1], v[2], 0, 1, 0, threeColor);
+            // ===== BUILD OUTER PERIMETER (original corners, no inset) =====
+            let outerVerts = [];
+
+            // Back-left corner
+            if (cornerBackLeft && (bevelLeft || bevelBack)) {
+                if (bevelLeft) outerVerts.push([blX, blZ + bevel]);
+                if (bevelBack) outerVerts.push([blX + bevel, blZ]);
+            } else {
+                outerVerts.push([blX, blZ]);
             }
-            for (let i = 1; i < topVerts.length - 1; i++) {
-                // Reverse winding for top face to face upward
+
+            // Back-right corner
+            if (cornerBackRight && (bevelRight || bevelBack)) {
+                if (bevelBack) outerVerts.push([brX - bevel, brZ]);
+                if (bevelRight) outerVerts.push([brX, brZ + bevel]);
+            } else {
+                outerVerts.push([brX, brZ]);
+            }
+
+            // Front-right corner
+            if (cornerFrontRight && (bevelRight || bevelFront)) {
+                if (bevelRight) outerVerts.push([frX, frZ - bevel]);
+                if (bevelFront) outerVerts.push([frX - bevel, frZ]);
+            } else {
+                outerVerts.push([frX, frZ]);
+            }
+
+            // Front-left corner
+            if (cornerFrontLeft && (bevelLeft || bevelFront)) {
+                if (bevelFront) outerVerts.push([flX + bevel, flZ]);
+                if (bevelLeft) outerVerts.push([flX, flZ - bevel]);
+            } else {
+                outerVerts.push([flX, flZ]);
+            }
+
+            // ===== INNER TOP FACE =====
+            const topStartIdx = positions.length / 3;
+            for (const v of innerVerts) {
+                addVertex(v[0], innerTopY, v[1], 0, 1, 0, threeColor);
+            }
+            for (let i = 1; i < innerVerts.length - 1; i++) {
                 indices.push(topStartIdx, topStartIdx + i + 1, topStartIdx + i);
             }
 
-            // ===== BOTTOM FACE =====
-            // Mirror of top face but at botY
-            const botStartIdx = positions.length / 3;
-            for (const v of topVerts) {
-                addVertex(v[0], botY, v[2], 0, -1, 0, threeColor);
-            }
-            for (let i = 1; i < topVerts.length - 1; i++) {
-                // Normal winding for bottom face to face downward
-                indices.push(botStartIdx, botStartIdx + i, botStartIdx + i + 1);
-            }
-
-            // ===== SIDE FACES =====
-            // Connect top and bottom perimeters
-            const n = topVerts.length;
+            // ===== TOP BEVEL STRIP =====
+            // Connect inner perimeter (at innerTopY) to outer perimeter (at outerTopY)
+            const n = innerVerts.length;
             for (let i = 0; i < n; i++) {
                 const i2 = (i + 1) % n;
-                const t1 = topVerts[i];
-                const t2 = topVerts[i2];
-                const b1 = [t1[0], botY, t1[2]];
-                const b2 = [t2[0], botY, t2[2]];
+                const inner1 = innerVerts[i];
+                const inner2 = innerVerts[i2];
+                const outer1 = outerVerts[i];
+                const outer2 = outerVerts[i2];
 
-                // Calculate normal for this side face
-                const dx = t2[0] - t1[0];
-                const dz = t2[2] - t1[2];
+                // Calculate normal for this bevel face (pointing outward and upward)
+                const dx = outer2[0] - outer1[0];
+                const dz = outer2[1] - outer1[1];
                 const len = Math.sqrt(dx * dx + dz * dz);
-                const nx = dz / len;  // Perpendicular in XZ plane
+                const sideNx = dz / len;
+                const sideNz = -dx / len;
+                // Bevel normal is tilted 45 degrees up
+                const bevelLen = Math.sqrt(2);
+                const nx = sideNx / bevelLen;
+                const ny = 1 / bevelLen;
+                const nz = sideNz / bevelLen;
+
+                const bevelStartIdx = positions.length / 3;
+                addVertex(inner1[0], innerTopY, inner1[1], nx, ny, nz, threeColor);
+                addVertex(inner2[0], innerTopY, inner2[1], nx, ny, nz, threeColor);
+                addVertex(outer2[0], outerTopY, outer2[1], nx, ny, nz, threeColor);
+                addVertex(outer1[0], outerTopY, outer1[1], nx, ny, nz, threeColor);
+                indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
+                indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
+            }
+
+            // ===== VERTICAL SIDES =====
+            // Connect outer perimeter at outerTopY to outer perimeter at outerBotY
+            for (let i = 0; i < n; i++) {
+                const i2 = (i + 1) % n;
+                const t1 = outerVerts[i];
+                const t2 = outerVerts[i2];
+
+                const dx = t2[0] - t1[0];
+                const dz = t2[1] - t1[1];
+                const len = Math.sqrt(dx * dx + dz * dz);
+                const nx = dz / len;
                 const nz = -dx / len;
 
                 const sideStartIdx = positions.length / 3;
-                addVertex(t1[0], t1[1], t1[2], nx, 0, nz, threeColor);
-                addVertex(t2[0], t2[1], t2[2], nx, 0, nz, threeColor);
-                addVertex(b2[0], b2[1], b2[2], nx, 0, nz, threeColor);
-                addVertex(b1[0], b1[1], b1[2], nx, 0, nz, threeColor);
+                addVertex(t1[0], outerTopY, t1[1], nx, 0, nz, threeColor);
+                addVertex(t2[0], outerTopY, t2[1], nx, 0, nz, threeColor);
+                addVertex(t2[0], outerBotY, t2[1], nx, 0, nz, threeColor);
+                addVertex(t1[0], outerBotY, t1[1], nx, 0, nz, threeColor);
                 indices.push(sideStartIdx, sideStartIdx + 1, sideStartIdx + 2);
                 indices.push(sideStartIdx, sideStartIdx + 2, sideStartIdx + 3);
+            }
+
+            // ===== BOTTOM BEVEL STRIP =====
+            // Connect outer perimeter (at outerBotY) to inner perimeter (at innerBotY)
+            for (let i = 0; i < n; i++) {
+                const i2 = (i + 1) % n;
+                const outer1 = outerVerts[i];
+                const outer2 = outerVerts[i2];
+                const inner1 = innerVerts[i];
+                const inner2 = innerVerts[i2];
+
+                const dx = outer2[0] - outer1[0];
+                const dz = outer2[1] - outer1[1];
+                const len = Math.sqrt(dx * dx + dz * dz);
+                const sideNx = dz / len;
+                const sideNz = -dx / len;
+                // Bevel normal is tilted 45 degrees down
+                const bevelLen = Math.sqrt(2);
+                const nx = sideNx / bevelLen;
+                const ny = -1 / bevelLen;
+                const nz = sideNz / bevelLen;
+
+                const bevelStartIdx = positions.length / 3;
+                addVertex(outer1[0], outerBotY, outer1[1], nx, ny, nz, threeColor);
+                addVertex(outer2[0], outerBotY, outer2[1], nx, ny, nz, threeColor);
+                addVertex(inner2[0], innerBotY, inner2[1], nx, ny, nz, threeColor);
+                addVertex(inner1[0], innerBotY, inner1[1], nx, ny, nz, threeColor);
+                indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
+                indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
+            }
+
+            // ===== INNER BOTTOM FACE =====
+            const botStartIdx = positions.length / 3;
+            for (const v of innerVerts) {
+                addVertex(v[0], innerBotY, v[1], 0, -1, 0, threeColor);
+            }
+            for (let i = 1; i < innerVerts.length - 1; i++) {
+                indices.push(botStartIdx, botStartIdx + i, botStartIdx + i + 1);
             }
         }
     }
