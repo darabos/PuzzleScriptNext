@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * PuzzleScript 3D Renderer using Three.js
  *
@@ -36,7 +34,7 @@ let fillLight = null;    // Soft fill light (cool)
 let previousLevelState = null;  // Snapshot of level.objects before move
 let animationStartTime = 0;     // When current animation started
 let animationDuration = 100;    // Duration in ms for slide animation
-let isAnimating = false;        // Whether an animation is in progress
+let isAnimating3D = false;        // Whether an animation is in progress
 let animatedMeshes = [];        // Meshes that are being animated with their start/end positions
 let animationFrameId = null;    // requestAnimationFrame ID
 
@@ -253,9 +251,9 @@ function getOrCreateSpriteGeometry(spriteIndex) {
         return spriteGeometries[spriteIndex];
     }
 
-    if (!sprites || !sprites[spriteIndex]) return null;
+    if (!objectSprites || !objectSprites[spriteIndex]) return null;
 
-    const sprite = sprites[spriteIndex];
+    const sprite = objectSprites[spriteIndex];
     const spriteData = sprite.dat;
     const colors = sprite.colors;
 
@@ -621,11 +619,11 @@ function clearScene3D() {
  * Call this before processInput to enable smooth animation.
  */
 function snapshotLevelState() {
-    if (!level || !level.objects) return;
+    if (!curLevel || !curLevel.objects) return;
     previousLevelState = {
-        objects: new Int32Array(level.objects),
-        width: level.width,
-        height: level.height
+        objects: new Int32Array(curLevel.objects),
+        width: curLevel.width,
+        height: curLevel.height
     };
 }
 
@@ -662,7 +660,7 @@ function buildObjectPositionMap(objects, width, height) {
  * Returns array of: { objectIndex, fromPosIndex, toPosIndex }
  */
 function detectMovements() {
-    if (!previousLevelState || !level || !level.objects) return [];
+    if (!previousLevelState || !curLevel || !curLevel.objects) return [];
 
     const oldMap = buildObjectPositionMap(
         previousLevelState.objects,
@@ -670,9 +668,9 @@ function detectMovements() {
         previousLevelState.height
     );
     const newMap = buildObjectPositionMap(
-        level.objects,
-        level.width,
-        level.height
+        curLevel.objects,
+        curLevel.width,
+        curLevel.height
     );
 
     const movements = [];
@@ -699,8 +697,8 @@ function detectMovements() {
         for (const newPos of newPositions) {
             if (usedNew.has(newPos)) continue;  // Already matched (stayed in place)
 
-            const newX = (newPos / level.height) | 0;
-            const newY = newPos % level.height;
+            const newX = (newPos / curLevel.height) | 0;
+            const newY = newPos % curLevel.height;
 
             let bestOldPos = null;
             let bestDist = Infinity;
@@ -736,8 +734,8 @@ function detectMovements() {
  * Animation loop for smooth movement transitions
  */
 function animate3D() {
-    if (!isAnimating || !renderer3d || !scene3d || !camera3d) {
-        isAnimating = false;
+    if (!isAnimating3D || !renderer3d || !scene3d || !camera3d) {
+        isAnimating3D = false;
         return;
     }
 
@@ -765,7 +763,7 @@ function animate3D() {
     if (t < 1) {
         animationFrameId = requestAnimationFrame(animate3D);
     } else {
-        isAnimating = false;
+        isAnimating3D = false;
         animatedMeshes = [];
     }
 }
@@ -785,7 +783,7 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     const geometry = getOrCreateSpriteGeometry(spriteIndex);
     if (!geometry) return;
 
-    const sprite = sprites[spriteIndex];
+    const sprite = objectSprites[spriteIndex];
     const spriteData = sprite.dat;
     const spriteHeight = spriteData.length;
     const spriteWidth = spriteData[0] ? spriteData[0].length : 0;
@@ -885,14 +883,13 @@ function redraw3D() {
     }
 
     // Get current level data
-    const curlevel = level;
-    if (!curlevel || !curlevel.width || !curlevel.height) {
+    if (!curLevel || !curLevel.width || !curLevel.height) {
         renderer3d.render(scene3d, camera3d);
         return true;
     }
 
     // Detect level changes and clear cache when level changes
-    const currentLevelId = typeof curlevelTarget !== 'undefined' ? curlevelTarget : null;
+    const currentLevelId = typeof curLevelTarget !== 'undefined' ? curLevelTarget : null;
     if (currentLevelId !== lastLevelId) {
         clearScene3D();
         lastLevelId = currentLevelId;
@@ -914,25 +911,25 @@ function redraw3D() {
         var playerPositions = getPlayerPositions();
         if (playerPositions.length > 0) {
             var playerPosition = playerPositions[0];
-            var px = (playerPosition / curlevel.height) | 0;
-            var py = (playerPosition % curlevel.height) | 0;
+            var px = (playerPosition / curLevel.height) | 0;
+            var py = (playerPosition % curLevel.height) | 0;
             var screenx = (px / screenwidth) | 0;
             var screeny = (py / screenheight) | 0;
             mini = screenx * screenwidth;
             minj = screeny * screenheight;
-            maxi = Math.min(mini + screenwidth, curlevel.width);
-            maxj = Math.min(minj + screenheight, curlevel.height);
+            maxi = Math.min(mini + screenwidth, curLevel.width);
+            maxj = Math.min(minj + screenheight, curLevel.height);
         }
     } else if (zoomscreen) {
         var playerPositions = getPlayerPositions();
         if (playerPositions.length > 0) {
             var playerPosition = playerPositions[0];
-            var px = (playerPosition / curlevel.height) | 0;
-            var py = (playerPosition % curlevel.height) | 0;
-            mini = Math.max(Math.min(px - ((screenwidth / 2) | 0), curlevel.width - screenwidth), 0);
-            minj = Math.max(Math.min(py - ((screenheight / 2) | 0), curlevel.height - screenheight), 0);
-            maxi = Math.min(mini + screenwidth, curlevel.width);
-            maxj = Math.min(minj + screenheight, curlevel.height);
+            var px = (playerPosition / curLevel.height) | 0;
+            var py = (playerPosition % curLevel.height) | 0;
+            mini = Math.max(Math.min(px - ((screenwidth / 2) | 0), curLevel.width - screenwidth), 0);
+            minj = Math.max(Math.min(py - ((screenheight / 2) | 0), curLevel.height - screenheight), 0);
+            maxi = Math.min(mini + screenwidth, curLevel.width);
+            maxj = Math.min(minj + screenheight, curLevel.height);
         }
     }
 
@@ -995,8 +992,8 @@ function redraw3D() {
 
     for (let i = mini; i < maxi; i++) {
         for (let j = minj; j < maxj; j++) {
-            const posIndex = j + i * curlevel.height;
-            const posMask = curlevel.getCellInto(posIndex, _o12);
+            const posIndex = j + i * curLevel.height;
+            const posMask = curLevel.getCellInto(posIndex, _o12);
 
             const cellKey = `${i},${j}`;
             layerCounter[cellKey] = layerCounter[cellKey] || 0;
@@ -1031,7 +1028,7 @@ function redraw3D() {
 
     // Start animation if we have movements
     if (animatedMeshes.length > 0) {
-        isAnimating = true;
+        isAnimating3D = true;
         animationStartTime = performance.now();
         animate3D();
     } else {
