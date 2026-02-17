@@ -756,7 +756,12 @@ function onKeyDown(event) {
     	return prevent(event);
     }
 
-    if(lastDownTarget === canvas || (window.Mobile && (lastDownTarget === window.Mobile.focusIndicator) ) ){
+    // Check if target is any game canvas (2D or 3D)
+    const isGameCanvas = lastDownTarget === canvas ||
+      (lastDownTarget && lastDownTarget.id === 'gameCanvas3D') ||
+      (window.Mobile && (lastDownTarget === window.Mobile.focusIndicator));
+
+    if (isGameCanvas){
     	if (keybuffer.indexOf(event.keyCode)===-1) {
     		if (event&&(event.ctrlKey || event.metaKey)){
 		    } else {

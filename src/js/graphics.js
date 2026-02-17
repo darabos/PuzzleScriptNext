@@ -439,6 +439,13 @@ function redraw() {
     }
     if (debugSwitch.includes('redraw')) console.log(`Redraw: ${JSON.stringify(perfCounters)}`);
 
+    // Try 3D rendering first (if enabled and available)
+    if (typeof redraw3D === 'function' && use3DRenderer) {
+        if (redraw3D()) {
+            return;  // 3D rendering succeeded
+        }
+    }
+
     if (textMode)
         redrawTextMode();
     else redrawCellGrid(curLevel);
