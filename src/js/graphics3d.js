@@ -31,7 +31,6 @@ let lastSpritesRef = null;  // Track sprites array to detect recompilation
 // Three-point lighting system
 let keyLight = null;     // Main shadow-casting light (warm)
 let fillLight = null;    // Soft fill light (cool)
-let backLight = null;    // Rim/back light for edge definition
 
 // Animation system
 let previousLevelState = null;  // Snapshot of level.objects before move
@@ -146,25 +145,24 @@ function init3DRenderer() {
 
     // KEY LIGHT - Main light, warm color, casts shadows
     // Positioned front-right, above the scene
-    keyLight = new THREE.DirectionalLight(0xfffaf0, 1.0);  // Warm white
-    keyLight.position.set(30, 50, 30);
+    keyLight = new THREE.SpotLight(0xffeedd, 1);  // Warm white, higher intensity for spot
+    keyLight.angle = Math.PI / 4;  // Cone angle (45 degrees)
+    keyLight.penumbra = 0.5;  // Soft edge falloff
+    keyLight.decay = 1.5;  // Light decay with distance
     keyLight.castShadow = true;
 
-    // VSM shadow settings for key light
+    // Shadow settings for spot light
     keyLight.shadow.mapSize.width = 2048;
     keyLight.shadow.mapSize.height = 2048;
-    keyLight.shadow.camera.near = 1;
+    keyLight.shadow.camera.near = 10;
     keyLight.shadow.camera.far = 200;
-    keyLight.shadow.camera.left = -50;
-    keyLight.shadow.camera.right = 50;
-    keyLight.shadow.camera.top = 50;
-    keyLight.shadow.camera.bottom = -50;
+    keyLight.shadow.camera.fov = 50;
 
     // VSM-specific: radius controls shadow softness (blur)
     keyLight.shadow.radius = 8;  // Soft shadow blur radius
     keyLight.shadow.blurSamples = 25;  // Quality of blur
 
-    // VSM doesn't need traditional bias, but small values help
+    // Shadow bias
     keyLight.shadow.bias = 0.0001;
 
     scene3d.add(keyLight);
@@ -172,24 +170,16 @@ function init3DRenderer() {
 
     // FILL LIGHT - Soft light, cool color, no shadows
     // Positioned front-left, lower than key light
-    fillLight = new THREE.DirectionalLight(0xe0e8ff, 0.4);  // Cool blue-white
-    fillLight.position.set(-30, 25, 20);
+    fillLight = new THREE.DirectionalLight(0xddeeff, 0.5);  // Cool blue-white
     fillLight.castShadow = false;  // Fill light doesn't cast shadows
     scene3d.add(fillLight);
-
-    // BACK LIGHT (Rim Light) - Creates edge definition
-    // Positioned behind and above the scene
-    backLight = new THREE.DirectionalLight(0xfff0e0, 0.6);  // Warm accent
-    backLight.position.set(0, 40, -40);
-    backLight.castShadow = false;  // Back light doesn't cast shadows
-    scene3d.add(backLight);
 
     // Create reusable cube geometry
     cubeGeometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
 
     // Load clay normal map texture
     const textureLoader = new THREE.TextureLoader();
-    const NORMAL_SCALE = 1.5;  // Adjust normal map strength for subtle effect
+    const NORMAL_SCALE = 0.5;  // Adjust normal map strength for subtle effect
     clayNormalMap = textureLoader.load('images/clay_normal.jpg', function(texture) {
         texture.wrapS = THREE.RepeatWrapping;
         texture.wrapT = THREE.RepeatWrapping;
@@ -955,24 +945,18 @@ function redraw3D() {
     // Update shadow camera to cover the level area
     if (keyLight) {
         const shadowSize = Math.max(visibleWidth, visibleHeight) * 6;
-        keyLight.shadow.camera.left = -shadowSize;
-        keyLight.shadow.camera.right = shadowSize;
-        keyLight.shadow.camera.top = shadowSize;
-        keyLight.shadow.camera.bottom = -shadowSize;
+
+        // SpotLight uses perspective shadow camera - update far plane and distance
+        keyLight.shadow.camera.far = shadowSize * 3;
         keyLight.shadow.camera.updateProjectionMatrix();
 
         // Position key light relative to level center (front-right-above)
-        keyLight.position.set(shadowSize * 0.6, shadowSize * 1.2, shadowSize * 0.6);
+        keyLight.position.set(shadowSize * 0.6, shadowSize * 0.6, shadowSize * 0.6);
         keyLight.target.position.set(0, 0, 0);
 
         // Update fill light position (front-left)
         if (fillLight) {
             fillLight.position.set(-shadowSize * 0.6, shadowSize * 0.5, shadowSize * 0.4);
-        }
-
-        // Update back light position (behind-above)
-        if (backLight) {
-            backLight.position.set(0, shadowSize * 0.8, -shadowSize * 0.8);
         }
     }
 
