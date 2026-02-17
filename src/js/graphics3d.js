@@ -227,7 +227,19 @@ function updateCameraPosition() {
 }
 
 /**
+ * Check if a pixel in the sprite is filled (non-transparent)
+ */
+function isPixelFilled(spriteData, colors, px, py, width, height) {
+    if (px < 0 || px >= width || py < 0 || py >= height) return false;
+    const colorIndex = spriteData[py][px];
+    if (colorIndex < 0) return false;
+    const color = colors[colorIndex];
+    return color && color !== 'transparent' && color !== '#00000000';
+}
+
+/**
  * Get or create a merged geometry for a sprite (all cubes combined with vertex colors)
+ * Implements rounded edges based on neighbor occupancy for claymation look
  */
 function getOrCreateSpriteGeometry(spriteIndex) {
     if (spriteGeometries[spriteIndex]) {
@@ -249,117 +261,204 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     let cubeCount = 0;
     for (let py = 0; py < spriteHeight; py++) {
         for (let px = 0; px < spriteWidth; px++) {
-            const colorIndex = spriteData[py][px];
-            if (colorIndex >= 0) {
-                const color = colors[colorIndex];
-                if (color && color !== 'transparent' && color !== '#00000000') {
-                    cubeCount++;
-                }
+            if (isPixelFilled(spriteData, colors, px, py, spriteWidth, spriteHeight)) {
+                cubeCount++;
             }
         }
     }
 
     if (cubeCount === 0) return null;
 
-    // Create merged geometry using BufferGeometryUtils or manual merging
+    // Create merged geometry
     const positions = [];
     const normals = [];
     const vertexColors = [];
     const indices = [];
 
-    // Template cube vertices (centered at origin)
     const halfSize = CUBE_SIZE / 2;
-    const cubeVerts = [
-        // Front face
-        [-halfSize, -halfSize,  halfSize],
-        [ halfSize, -halfSize,  halfSize],
-        [ halfSize,  halfSize,  halfSize],
-        [-halfSize,  halfSize,  halfSize],
-        // Back face
-        [-halfSize, -halfSize, -halfSize],
-        [-halfSize,  halfSize, -halfSize],
-        [ halfSize,  halfSize, -halfSize],
-        [ halfSize, -halfSize, -halfSize],
-        // Top face
-        [-halfSize,  halfSize, -halfSize],
-        [-halfSize,  halfSize,  halfSize],
-        [ halfSize,  halfSize,  halfSize],
-        [ halfSize,  halfSize, -halfSize],
-        // Bottom face
-        [-halfSize, -halfSize, -halfSize],
-        [ halfSize, -halfSize, -halfSize],
-        [ halfSize, -halfSize,  halfSize],
-        [-halfSize, -halfSize,  halfSize],
-        // Right face
-        [ halfSize, -halfSize, -halfSize],
-        [ halfSize,  halfSize, -halfSize],
-        [ halfSize,  halfSize,  halfSize],
-        [ halfSize, -halfSize,  halfSize],
-        // Left face
-        [-halfSize, -halfSize, -halfSize],
-        [-halfSize, -halfSize,  halfSize],
-        [-halfSize,  halfSize,  halfSize],
-        [-halfSize,  halfSize, -halfSize],
-    ];
-
-    const cubeNormals = [
-        // Front
-        [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1],
-        // Back
-        [0, 0, -1], [0, 0, -1], [0, 0, -1], [0, 0, -1],
-        // Top
-        [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0],
-        // Bottom
-        [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0],
-        // Right
-        [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0],
-        // Left
-        [-1, 0, 0], [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],
-    ];
-
-    const cubeIndices = [
-        0, 1, 2, 0, 2, 3,       // Front
-        4, 5, 6, 4, 6, 7,       // Back
-        8, 9, 10, 8, 10, 11,    // Top
-        12, 13, 14, 12, 14, 15, // Bottom
-        16, 17, 18, 16, 18, 19, // Right
-        20, 21, 22, 20, 22, 23  // Left
-    ];
+    const bevel = CUBE_SIZE * 0.25;  // Bevel size for rounding
 
     let vertexOffset = 0;
 
+    // Helper to add a vertex
+    function addVertex(x, y, z, nx, ny, nz, color) {
+        positions.push(x, y, z);
+        normals.push(nx, ny, nz);
+        vertexColors.push(color.r, color.g, color.b);
+    }
+
+    // Helper to add a triangle
+    function addTriangle(v0, v1, v2) {
+        indices.push(vertexOffset + v0, vertexOffset + v1, vertexOffset + v2);
+    }
+
+    // Helper to add a quad (two triangles)
+    function addQuad(v0, v1, v2, v3) {
+        indices.push(vertexOffset + v0, vertexOffset + v1, vertexOffset + v2);
+        indices.push(vertexOffset + v0, vertexOffset + v2, vertexOffset + v3);
+    }
+
     for (let py = 0; py < spriteHeight; py++) {
         for (let px = 0; px < spriteWidth; px++) {
+            if (!isPixelFilled(spriteData, colors, px, py, spriteWidth, spriteHeight)) continue;
+
             const colorIndex = spriteData[py][px];
-            if (colorIndex < 0) continue;
-
             const color = colors[colorIndex];
-            if (!color || color === 'transparent' || color === '#00000000') continue;
-
-            // Parse color
             const threeColor = new THREE.Color(color.toLowerCase());
 
             // Offset for this cube within the sprite
             const offsetX = px * CUBE_SIZE;
             const offsetZ = py * CUBE_SIZE;
 
-            // Add vertices
-            for (let v = 0; v < 24; v++) {
-                positions.push(
-                    cubeVerts[v][0] + offsetX,
-                    cubeVerts[v][1],
-                    cubeVerts[v][2] + offsetZ
-                );
-                normals.push(cubeNormals[v][0], cubeNormals[v][1], cubeNormals[v][2]);
-                vertexColors.push(threeColor.r, threeColor.g, threeColor.b);
+            // Check neighbors (in sprite coordinates: x=right, z=down in 3D)
+            const hasLeft = isPixelFilled(spriteData, colors, px - 1, py, spriteWidth, spriteHeight);
+            const hasRight = isPixelFilled(spriteData, colors, px + 1, py, spriteWidth, spriteHeight);
+            const hasFront = isPixelFilled(spriteData, colors, px, py + 1, spriteWidth, spriteHeight);  // +Z
+            const hasBack = isPixelFilled(spriteData, colors, px, py - 1, spriteWidth, spriteHeight);   // -Z
+
+            // Diagonal neighbors for corners
+            const hasBackLeft = isPixelFilled(spriteData, colors, px - 1, py - 1, spriteWidth, spriteHeight);
+            const hasBackRight = isPixelFilled(spriteData, colors, px + 1, py - 1, spriteWidth, spriteHeight);
+            const hasFrontLeft = isPixelFilled(spriteData, colors, px - 1, py + 1, spriteWidth, spriteHeight);
+            const hasFrontRight = isPixelFilled(spriteData, colors, px + 1, py + 1, spriteWidth, spriteHeight);
+
+            // Determine corner rounding based on the rules
+            // A corner is exposed if it's at the intersection of two exposed edges
+            // or if the diagonal is empty and both adjacent edges are present
+            const cornerBackLeft = (!hasLeft && !hasBack) || (!hasBackLeft && hasLeft && hasBack);
+            const cornerBackRight = (!hasRight && !hasBack) || (!hasBackRight && hasRight && hasBack);
+            const cornerFrontLeft = (!hasLeft && !hasFront) || (!hasFrontLeft && hasLeft && hasFront);
+            const cornerFrontRight = (!hasRight && !hasFront) || (!hasFrontRight && hasRight && hasFront);
+
+            // Edge bevels (only on exposed edges)
+            const bevelLeft = !hasLeft;
+            const bevelRight = !hasRight;
+            const bevelFront = !hasFront;
+            const bevelBack = !hasBack;
+
+            // Build the voxel geometry with bevels
+            // We'll build the top face with beveled corners/edges, then extrude down
+
+            // Top face vertices - start with corners and work around
+            // Corner positions with bevels applied
+            const topY = halfSize;
+            const botY = -halfSize;
+
+            // Define the 8 potential corner positions on top face
+            // Without bevel: corners at (-halfSize, halfSize, -halfSize), etc.
+            // With bevel: corners are chamfered inward
+
+            // Back-left corner (-X, -Z)
+            let blX = -halfSize + offsetX;
+            let blZ = -halfSize + offsetZ;
+            let blBevelX = bevelLeft ? bevel : 0;
+            let blBevelZ = bevelBack ? bevel : 0;
+
+            // Back-right corner (+X, -Z)
+            let brX = halfSize + offsetX;
+            let brZ = -halfSize + offsetZ;
+            let brBevelX = bevelRight ? -bevel : 0;
+            let brBevelZ = bevelBack ? bevel : 0;
+
+            // Front-right corner (+X, +Z)
+            let frX = halfSize + offsetX;
+            let frZ = halfSize + offsetZ;
+            let frBevelX = bevelRight ? -bevel : 0;
+            let frBevelZ = bevelFront ? -bevel : 0;
+
+            // Front-left corner (-X, +Z)
+            let flX = -halfSize + offsetX;
+            let flZ = halfSize + offsetZ;
+            let flBevelX = bevelLeft ? bevel : 0;
+            let flBevelZ = bevelFront ? -bevel : 0;
+
+            // ===== TOP FACE =====
+            // Build top face with potential corner cuts
+            // We go around the perimeter counter-clockwise: back-left → back-right → front-right → front-left
+            // At each chamfered corner, add incoming edge vertex first, then outgoing edge vertex
+
+            let topVerts = [];
+
+            // Back-left corner: arrives from left edge, departs to back edge
+            if (cornerBackLeft && (bevelLeft || bevelBack)) {
+                console.log('Chamfering back-left corner at sprite', spriteIndex, 'px', px, 'py', py);
+                // Chamfered corner - add two vertices (no original corner!)
+                if (bevelLeft) topVerts.push([blX + blBevelX, topY, blZ + blBevelZ + bevel]);      // left edge vertex
+                if (bevelBack) topVerts.push([blX + blBevelX + bevel, topY, blZ + blBevelZ]);      // back edge vertex
+            } else {
+                topVerts.push([blX + blBevelX, topY, blZ + blBevelZ]);
             }
 
-            // Add indices (offset by current vertex count)
-            for (const idx of cubeIndices) {
-                indices.push(idx + vertexOffset);
+            // Back-right corner: arrives from back edge, departs to right edge
+            if (cornerBackRight && (bevelRight || bevelBack)) {
+                if (bevelBack) topVerts.push([brX + brBevelX - bevel, topY, brZ + brBevelZ]);      // back edge vertex
+                if (bevelRight) topVerts.push([brX + brBevelX, topY, brZ + brBevelZ + bevel]);     // right edge vertex
+            } else {
+                topVerts.push([brX + brBevelX, topY, brZ + brBevelZ]);
             }
 
-            vertexOffset += 24;
+            // Front-right corner: arrives from right edge, departs to front edge
+            if (cornerFrontRight && (bevelRight || bevelFront)) {
+                if (bevelRight) topVerts.push([frX + frBevelX, topY, frZ + frBevelZ - bevel]);     // right edge vertex
+                if (bevelFront) topVerts.push([frX + frBevelX - bevel, topY, frZ + frBevelZ]);     // front edge vertex
+            } else {
+                topVerts.push([frX + frBevelX, topY, frZ + frBevelZ]);
+            }
+
+            // Front-left corner: arrives from front edge, departs to left edge
+            if (cornerFrontLeft && (bevelLeft || bevelFront)) {
+                if (bevelFront) topVerts.push([flX + flBevelX + bevel, topY, flZ + flBevelZ]);     // front edge vertex
+                if (bevelLeft) topVerts.push([flX + flBevelX, topY, flZ + flBevelZ - bevel]);      // left edge vertex
+            } else {
+                topVerts.push([flX + flBevelX, topY, flZ + flBevelZ]);
+            }
+
+            // Add top face vertices and triangulate as a fan from first vertex
+            const topStartIdx = positions.length / 3;
+            for (const v of topVerts) {
+                addVertex(v[0], v[1], v[2], 0, 1, 0, threeColor);
+            }
+            for (let i = 1; i < topVerts.length - 1; i++) {
+                // Reverse winding for top face to face upward
+                indices.push(topStartIdx, topStartIdx + i + 1, topStartIdx + i);
+            }
+
+            // ===== BOTTOM FACE =====
+            // Mirror of top face but at botY
+            const botStartIdx = positions.length / 3;
+            for (const v of topVerts) {
+                addVertex(v[0], botY, v[2], 0, -1, 0, threeColor);
+            }
+            for (let i = 1; i < topVerts.length - 1; i++) {
+                // Normal winding for bottom face to face downward
+                indices.push(botStartIdx, botStartIdx + i, botStartIdx + i + 1);
+            }
+
+            // ===== SIDE FACES =====
+            // Connect top and bottom perimeters
+            const n = topVerts.length;
+            for (let i = 0; i < n; i++) {
+                const i2 = (i + 1) % n;
+                const t1 = topVerts[i];
+                const t2 = topVerts[i2];
+                const b1 = [t1[0], botY, t1[2]];
+                const b2 = [t2[0], botY, t2[2]];
+
+                // Calculate normal for this side face
+                const dx = t2[0] - t1[0];
+                const dz = t2[2] - t1[2];
+                const len = Math.sqrt(dx * dx + dz * dz);
+                const nx = dz / len;  // Perpendicular in XZ plane
+                const nz = -dx / len;
+
+                const sideStartIdx = positions.length / 3;
+                addVertex(t1[0], t1[1], t1[2], nx, 0, nz, threeColor);
+                addVertex(t2[0], t2[1], t2[2], nx, 0, nz, threeColor);
+                addVertex(b2[0], b2[1], b2[2], nx, 0, nz, threeColor);
+                addVertex(b1[0], b1[1], b1[2], nx, 0, nz, threeColor);
+                indices.push(sideStartIdx, sideStartIdx + 1, sideStartIdx + 2);
+                indices.push(sideStartIdx, sideStartIdx + 2, sideStartIdx + 3);
+            }
         }
     }
 
