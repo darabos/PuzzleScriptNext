@@ -43,7 +43,7 @@ const CAMERA_FOV = 40;
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 1000;
 const CUBE_SIZE = 1;
-const CAMERA_DISTANCE = 8;
+const CAMERA_DISTANCE = 1.5;
 
 // Camera position and rotation
 let cameraDistance = CAMERA_DISTANCE;
@@ -146,7 +146,7 @@ function init3DRenderer() {
     // Shadow settings for spot light
     keyLight.shadow.mapSize.width = 2048;
     keyLight.shadow.mapSize.height = 2048;
-    keyLight.shadow.camera.near = 10;
+    keyLight.shadow.camera.near = 20;
     keyLight.shadow.camera.far = 200;
     keyLight.shadow.camera.fov = 50;
 
@@ -786,15 +786,15 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     const sprite = objectSprites[spriteIndex];
 
     // Calculate cell size
-    const cellSizeX = 5 * CUBE_SIZE;
-    const cellSizeZ = 5 * CUBE_SIZE;
+    const cellSizeX = state.sprite_size * CUBE_SIZE;
+    const cellSizeZ = state.sprite_size * CUBE_SIZE;
 
     // Center the level around origin
     const totalWidth = visibleWidth * cellSizeX;
     const totalHeight = visibleHeight * cellSizeZ;
 
     const baseX = gridX * cellSizeX - totalWidth / 2;
-    const baseZ = gridY * cellSizeZ - totalHeight / 2 + (5 - sprite.dat.length);
+    const baseZ = gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length);
     const baseY = layer * CUBE_SIZE;
 
     // Get or create the InstancedMesh for this sprite
@@ -893,9 +893,9 @@ function redraw3D() {
     }
 
     // Detect recompilation (sprites array reference changes)
-    if (typeof sprites !== 'undefined' && sprites !== lastSpritesRef) {
+    if (typeof objectSprites !== 'undefined' && objectSprites !== lastSpritesRef) {
         clearScene3D();
-        lastSpritesRef = sprites;
+        lastSpritesRef = objectSprites;
     }
 
     // Calculate visible area (handle flickscreen/zoomscreen)
@@ -933,12 +933,12 @@ function redraw3D() {
     // Update camera to center on visible area
     const visibleWidth = maxi - mini;
     const visibleHeight = maxj - minj;
-    cameraDistance = Math.max(visibleWidth / camera3d.aspect, visibleHeight) * CAMERA_DISTANCE;
+    cameraDistance = Math.max(visibleWidth / camera3d.aspect, visibleHeight) * state.sprite_size * CAMERA_DISTANCE;
     updateCameraPosition();
 
     // Update shadow camera to cover the level area
     if (keyLight) {
-        const shadowSize = Math.max(visibleWidth, visibleHeight) * 3;
+        const shadowSize = Math.max(visibleWidth, visibleHeight) * state.sprite_size * 0.7;
 
         // SpotLight uses perspective shadow camera - update far plane and distance
         keyLight.shadow.camera.far = shadowSize * 6;
@@ -956,7 +956,7 @@ function redraw3D() {
 
     // Create ground plane to receive shadows
     if (!groundPlane) {
-        const groundGeometry = new THREE.PlaneGeometry(200, 200);
+        const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
         // Use MeshStandardMaterial with subtle color for visible ground with shadows
         const groundMaterial = new THREE.MeshStandardMaterial({
             color: 0x333333,
