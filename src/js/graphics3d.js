@@ -10,7 +10,6 @@ let renderer3d = null;
 let scene3d = null;
 let camera3d = null;
 let container3d = null;  // The DOM container element
-let cubeGeometry = null;
 let use3DRenderer = true; // Toggle between 2D and 3D rendering
 let groundPlane = null;  // Ground plane to receive shadows
 
@@ -165,9 +164,6 @@ function init3DRenderer() {
     fillLight = new THREE.DirectionalLight(0xddeeff, 0.5);  // Cool blue-white
     fillLight.castShadow = false;  // Fill light doesn't cast shadows
     scene3d.add(fillLight);
-
-    // Create reusable cube geometry
-    cubeGeometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
 
     // Load clay normal map texture (optional - works without it for standalone export)
     const textureLoader = new THREE.TextureLoader();
@@ -985,15 +981,24 @@ function redraw3D() {
     }
 
     // Render all objects in the visible area
-    let layerCounter = {};  // Track layers per cell
+
+    // Helper function to find which collision layer group an object belongs to
+    function getCollisionGroupIndex(objectId) {
+        for (let g = 0; g < state.collisionLayerGroups.length; g++) {
+            const group = state.collisionLayerGroups[g];
+            if (objectId >= group.firstObjectNo && objectId < group.firstObjectNo + group.numObjects) {
+                return g;
+            }
+        }
+        return -1;
+    }
 
     for (let i = mini; i < maxi; i++) {
         for (let j = minj; j < maxj; j++) {
             const posIndex = j + i * curLevel.height;
             const posMask = curLevel.getCellInto(posIndex, _o12);
-
-            const cellKey = `${i},${j}`;
-            layerCounter[cellKey] = layerCounter[cellKey] || 0;
+            let height = 0;
+            let lastGroupIndex = -1;
 
             for (let k = 0; k < state.objectCount; k++) {
                 if (posMask.get(k) != 0 && getOrCreateSpriteGeometry(k)) {
@@ -1010,8 +1015,16 @@ function redraw3D() {
                         };
                     }
 
-                    createSprite3D(k, i - mini, j - minj, layerCounter[cellKey], visibleWidth, visibleHeight, animFrom);
-                    layerCounter[cellKey]++;
+                    // When there are multiple collision layer groups, use them for layering.
+                    const groupIndex = getCollisionGroupIndex(k);
+                    if (state.collisionLayerGroups.length <= 1 || groupIndex !== lastGroupIndex) {
+                        height += 1;
+                    } else {
+                        height += 0.1;
+                    }
+                    lastGroupIndex = groupIndex;
+
+                    createSprite3D(k, i - mini, j - minj, height, visibleWidth, visibleHeight, animFrom);
                 }
             }
         }
