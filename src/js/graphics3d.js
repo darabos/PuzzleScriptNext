@@ -42,6 +42,7 @@ const CAMERA_FOV = 40;
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 1000;
 const CUBE_SIZE = 1;
+const SPRITE_HEIGHT = 0.2;  // Sprite height as fraction of grid cell size.
 const CAMERA_DISTANCE = 1.5;
 
 // Camera position and rotation
@@ -278,6 +279,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     const indices = [];
 
     const halfSize = CUBE_SIZE / 2;
+    const halfSizeVertical = SPRITE_HEIGHT * CUBE_SIZE * state.sprite_size / 2;
     const bevel = CUBE_SIZE * 0.25;  // Bevel size for rounding
     const uvScale = 0.1;  // Scale factor for UV tiling
 
@@ -358,10 +360,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             // - Inner bottom face (inset, at full depth)
 
             // Y coordinates for the geometry
-            const innerTopY = halfSize;              // Top face stays at full height
-            const outerTopY = halfSize - bevel;      // Outer edge is lowered by bevel
-            const outerBotY = -halfSize + bevel;     // Outer bottom edge is raised by bevel
-            const innerBotY = -halfSize;             // Bottom face at full depth
+            const innerTopY = halfSizeVertical;              // Top face stays at full height
+            const outerTopY = halfSizeVertical - bevel;      // Outer edge is lowered by bevel
+            const outerBotY = -halfSizeVertical + bevel;     // Outer bottom edge is raised by bevel
+            const innerBotY = -halfSizeVertical;             // Bottom face at full depth
 
             // Define corner positions
             // Back-left corner (-X, -Z)
@@ -791,7 +793,7 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
 
     const baseX = gridX * cellSizeX - totalWidth / 2;
     const baseZ = gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length);
-    const baseY = layer * CUBE_SIZE;
+    const baseY = layer * SPRITE_HEIGHT * CUBE_SIZE * state.sprite_size;
 
     // Get or create the InstancedMesh for this sprite
     let mesh = instancedMeshes[spriteIndex];
