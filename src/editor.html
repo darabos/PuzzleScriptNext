@@ -128,7 +128,14 @@
 </div>
 
 <!--___SCRIPTINSERT___-->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.183.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/"
+  }
+}
+</script>
 <script src="js/Blob.js"></script>
 <script src="js/FileSaver.js"></script>
 
@@ -154,7 +161,7 @@
 <script src="js/codemirror/comment.js"></script>
 <script src="js/colors.js"></script>
 <script src="js/graphics.js"></script>
-<script src="js/graphics3d.js"></script>
+<script src="js/graphics3d.js" type="module"></script>
 <script src="js/mobile.js"></script>
 <script src="js/inputoutput.js"></script>
 

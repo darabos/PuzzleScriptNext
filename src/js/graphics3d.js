@@ -5,16 +5,19 @@
  * Each pixel in the original sprites becomes a cube in 3D space.
  */
 
+import * as THREE from 'three';
+
 // Three.js globals
 let renderer3d = null;
 let scene3d = null;
 let camera3d = null;
 let container3d = null;  // The DOM container element
-let use3DRenderer = true; // Toggle between 2D and 3D rendering
 let groundPlane = null;  // Ground plane to receive shadows
 
 // Sprite geometry caching - merged geometry per sprite type
 let spriteGeometries = {};  // spriteIndex -> THREE.BufferGeometry (merged cubes with vertex colors)
+let spriteMinAlpha = {};    // spriteIndex -> minimum alpha value (1.0 = fully opaque)
+let spriteGlassMaterials = {};  // spriteIndex -> MeshPhysicalMaterial (per-sprite glass with custom transmission)
 let spriteMaterial = null;  // Shared material using vertex colors
 let clayNormalMap = null;   // Normal map texture for clay look
 
@@ -54,12 +57,6 @@ let cameraAngleY = 0.0;
  * Initialize the Three.js renderer, scene, and camera
  */
 function init3DRenderer() {
-    if (!window.THREE) {
-        console.error('Three.js not loaded! Falling back to 2D renderer.');
-        use3DRenderer = false;
-        return false;
-    }
-
     // Get the canvas container - try different selectors for play.html vs editor.html
     let container = document.querySelector('.gameContainer');
     if (!container) {
@@ -72,7 +69,7 @@ function init3DRenderer() {
     }
     if (!container) {
         console.error('Game container not found!');
-        use3DRenderer = false;
+        window.use3DRenderer = false;
         return false;
     }
 
@@ -91,6 +88,9 @@ function init3DRenderer() {
     // Enable high-quality VSM shadows (Variance Shadow Maps)
     renderer3d.shadowMap.enabled = true;
     renderer3d.shadowMap.type = THREE.VSMShadowMap;  // VSM for smooth soft shadows
+    renderer3d.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer3d.toneMappingExposure = 1;
+
     renderer3d.domElement.id = 'gameCanvas3D';
     renderer3d.domElement.style.position = 'absolute';
     renderer3d.domElement.style.top = '0';
@@ -132,21 +132,21 @@ function init3DRenderer() {
     // === THREE-POINT LIGHTING SYSTEM ===
 
     // Ambient light - very low, just to prevent pure black shadows
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.15);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
     scene3d.add(ambientLight);
 
     // KEY LIGHT - Main light, warm color, casts shadows
     // Positioned front-right, above the scene
-    keyLight = new THREE.SpotLight(0xffeedd, 1);  // Warm white, higher intensity for spot
+    keyLight = new THREE.SpotLight(0xffeedd);  // Warm white
     keyLight.angle = Math.PI / 4;  // Cone angle (45 degrees)
     keyLight.penumbra = 0.5;  // Soft edge falloff
-    keyLight.decay = 1.5;  // Light decay with distance
+    keyLight.decay = 0.5;  // Light decay with distance
     keyLight.castShadow = true;
 
     // Shadow settings for spot light
     keyLight.shadow.mapSize.width = 2048;
     keyLight.shadow.mapSize.height = 2048;
-    keyLight.shadow.camera.near = 20;
+    keyLight.shadow.camera.near = 100;
     keyLight.shadow.camera.far = 200;
     keyLight.shadow.camera.fov = 50;
 
@@ -162,7 +162,7 @@ function init3DRenderer() {
 
     // FILL LIGHT - Soft light, cool color, no shadows
     // Positioned front-left, lower than key light
-    fillLight = new THREE.DirectionalLight(0xddeeff, 0.5);  // Cool blue-white
+    fillLight = new THREE.DirectionalLight(0xddeeff, 1);  // Cool blue-white
     fillLight.castShadow = false;  // Fill light doesn't cast shadows
     scene3d.add(fillLight);
 
@@ -229,6 +229,31 @@ function updateCameraPosition() {
 }
 
 /**
+ * Parse a color string, handling #RRGGBBAA format with alpha.
+ * Returns { color: THREE.Color, alpha: number (0-1) }
+ */
+function parseColorWithAlpha(colorStr) {
+    if (!colorStr) return { color: new THREE.Color(0, 0, 0), alpha: 0 };
+    const str = colorStr.toLowerCase().trim();
+
+    // Check for 8-character hex with alpha (#RRGGBBAA)
+    if (str.match(/^#[0-9a-f]{8}$/)) {
+        const r = parseInt(str.slice(1, 3), 16) / 255;
+        const g = parseInt(str.slice(3, 5), 16) / 255;
+        const b = parseInt(str.slice(5, 7), 16) / 255;
+        const a = parseInt(str.slice(7, 9), 16) / 255;
+        return { color: new THREE.Color(r, g, b), alpha: a };
+    }
+
+    // Standard color parsing (no alpha or full opacity)
+    try {
+        return { color: new THREE.Color(str), alpha: 1.0 };
+    } catch (e) {
+        return { color: new THREE.Color(0, 0, 0), alpha: 0 };
+    }
+}
+
+/**
  * Check if a pixel in the sprite is filled (non-transparent)
  */
 function isPixelFilled(spriteData, colors, px, py, width, height) {
@@ -270,6 +295,18 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     }
 
     if (cubeCount === 0) return null;
+
+    // Find minimum alpha value across all colors in the sprite
+    let minAlpha = 1.0;
+    for (const c of colors) {
+        if (c && c !== 'transparent' && c !== '#00000000') {
+            const parsed = parseColorWithAlpha(c);
+            if (parsed.alpha < minAlpha) {
+                minAlpha = parsed.alpha;
+            }
+        }
+    }
+    spriteMinAlpha[spriteIndex] = minAlpha;
 
     // Create merged geometry
     const positions = [];
@@ -319,7 +356,8 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             const colorIndex = spriteData[py][px];
             const color = colors[colorIndex];
-            const threeColor = new THREE.Color(color.toLowerCase());
+            const parsed = parseColorWithAlpha(color);
+            const threeColor = parsed.color;
 
             // Offset for this cube within the sprite
             const offsetX = px * CUBE_SIZE;
@@ -426,38 +464,68 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             }
 
             // ===== BUILD OUTER PERIMETER (original corners, no inset) =====
+            // Also track which segments are exposed (need vertical walls)
             let outerVerts = [];
+            let outerEdgeExposed = [];  // true if segment from outerVerts[i] to outerVerts[i+1] needs walls
 
             // Back-left corner
             if (cornerBackLeft && (bevelLeft || bevelBack)) {
-                if (bevelLeft) outerVerts.push([blX, blZ + bevel]);
-                if (bevelBack) outerVerts.push([blX + bevel, blZ]);
+                if (bevelLeft) {
+                    outerVerts.push([blX, blZ + bevel]);
+                    outerEdgeExposed.push(true);  // Corner bevel segment
+                }
+                if (bevelBack) {
+                    outerVerts.push([blX + bevel, blZ]);
+                    outerEdgeExposed.push(true);  // Back edge starts here
+                }
             } else {
                 outerVerts.push([blX, blZ]);
+                outerEdgeExposed.push(bevelBack);  // Back edge
             }
 
             // Back-right corner
             if (cornerBackRight && (bevelRight || bevelBack)) {
-                if (bevelBack) outerVerts.push([brX - bevel, brZ]);
-                if (bevelRight) outerVerts.push([brX, brZ + bevel]);
+                if (bevelBack) {
+                    outerVerts.push([brX - bevel, brZ]);
+                    outerEdgeExposed.push(true);  // Corner bevel segment
+                }
+                if (bevelRight) {
+                    outerVerts.push([brX, brZ + bevel]);
+                    outerEdgeExposed.push(true);  // Right edge starts here
+                }
             } else {
                 outerVerts.push([brX, brZ]);
+                outerEdgeExposed.push(bevelRight);  // Right edge
             }
 
             // Front-right corner
             if (cornerFrontRight && (bevelRight || bevelFront)) {
-                if (bevelRight) outerVerts.push([frX, frZ - bevel]);
-                if (bevelFront) outerVerts.push([frX - bevel, frZ]);
+                if (bevelRight) {
+                    outerVerts.push([frX, frZ - bevel]);
+                    outerEdgeExposed.push(true);  // Corner bevel segment
+                }
+                if (bevelFront) {
+                    outerVerts.push([frX - bevel, frZ]);
+                    outerEdgeExposed.push(true);  // Front edge starts here
+                }
             } else {
                 outerVerts.push([frX, frZ]);
+                outerEdgeExposed.push(bevelFront);  // Front edge
             }
 
             // Front-left corner
             if (cornerFrontLeft && (bevelLeft || bevelFront)) {
-                if (bevelFront) outerVerts.push([flX + bevel, flZ]);
-                if (bevelLeft) outerVerts.push([flX, flZ - bevel]);
+                if (bevelFront) {
+                    outerVerts.push([flX + bevel, flZ]);
+                    outerEdgeExposed.push(true);  // Corner bevel segment
+                }
+                if (bevelLeft) {
+                    outerVerts.push([flX, flZ - bevel]);
+                    outerEdgeExposed.push(true);  // Left edge (wraps to start)
+                }
             } else {
                 outerVerts.push([flX, flZ]);
+                outerEdgeExposed.push(bevelLeft);  // Left edge (wraps to start)
             }
 
             // ===== INNER TOP FACE =====
@@ -471,8 +539,11 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             // ===== TOP BEVEL STRIP =====
             // Connect inner perimeter (at innerTopY) to outer perimeter (at outerTopY)
+            // Only generate bevels for exposed edges
             const n = innerVerts.length;
             for (let i = 0; i < n; i++) {
+                if (!outerEdgeExposed[i]) continue;  // Skip internal edges
+
                 const i2 = (i + 1) % n;
                 const inner1 = innerVerts[i];
                 const inner2 = innerVerts[i2];
@@ -502,7 +573,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             // ===== VERTICAL SIDES =====
             // Connect outer perimeter at outerTopY to outer perimeter at outerBotY
+            // Only generate walls for exposed edges (where outerEdgeExposed is true)
             for (let i = 0; i < n; i++) {
+                if (!outerEdgeExposed[i]) continue;  // Skip internal edges
+
                 const i2 = (i + 1) % n;
                 const t1 = outerVerts[i];
                 const t2 = outerVerts[i2];
@@ -524,7 +598,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             // ===== BOTTOM BEVEL STRIP =====
             // Connect outer perimeter (at outerBotY) to inner perimeter (at innerBotY)
+            // Only generate bevels for exposed edges
             for (let i = 0; i < n; i++) {
+                if (!outerEdgeExposed[i]) continue;  // Skip internal edges
+
                 const i2 = (i + 1) % n;
                 const outer1 = outerVerts[i];
                 const outer2 = outerVerts[i2];
@@ -610,6 +687,12 @@ function clearScene3D() {
     animatedMeshes = [];
     // Clear sprite geometries when switching games (sprites may have changed)
     spriteGeometries = {};
+    spriteMinAlpha = {};
+    // Dispose and clear per-sprite glass materials
+    for (const key in spriteGlassMaterials) {
+        spriteGlassMaterials[key].dispose();
+    }
+    spriteGlassMaterials = {};
 }
 
 /**
@@ -799,8 +882,28 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     let mesh = instancedMeshes[spriteIndex];
     if (!mesh) {
         // Create new InstancedMesh with generous max count
+        // Use glass material with transmission based on min alpha if sprite has transparency
         const maxInstances = 1000;
-        mesh = new THREE.InstancedMesh(geometry, spriteMaterial, maxInstances);
+        const minAlpha = spriteMinAlpha[spriteIndex];
+        let material = spriteMaterial;
+        if (minAlpha < 1.0) {
+            // Create per-sprite glass material with transmission based on alpha
+            // Lower alpha = higher transmission (more transparent)
+            if (!spriteGlassMaterials[spriteIndex]) {
+                spriteGlassMaterials[spriteIndex] = new THREE.MeshPhysicalMaterial({
+                    vertexColors: true,
+                    roughness: 0.3,
+                    metalness: 0.0,
+                    transmission: 1.0 - minAlpha,
+                    thickness: 2,
+                    ior: 1.5,
+                    transparent: true,
+                    side: THREE.DoubleSide,
+                });
+            }
+            material = spriteGlassMaterials[spriteIndex];
+        }
+        mesh = new THREE.InstancedMesh(geometry, material, maxInstances);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.count = 0;
@@ -825,7 +928,7 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     if (animFrom) {
         // Start at animation origin
         const startBaseX = animFrom.gridX * cellSizeX - totalWidth / 2;
-        const startBaseZ = animFrom.gridY * cellSizeZ - totalHeight / 2;
+        const startBaseZ = animFrom.gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length);
         matrix.setPosition(startBaseX, baseY, startBaseZ);
 
         // Track for animation
@@ -849,7 +952,7 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
  * Main 3D redraw function - replaces the 2D redraw() when in 3D mode
  */
 function redraw3D() {
-    if (!use3DRenderer || !renderer3d || !scene3d || !camera3d) {
+    if (!window.use3DRenderer || !renderer3d || !scene3d || !camera3d) {
         return false;  // Fall back to 2D
     }
 
@@ -939,12 +1042,14 @@ function redraw3D() {
         const shadowSize = Math.max(visibleWidth, visibleHeight) * state.sprite_size * 0.7;
 
         // SpotLight uses perspective shadow camera - update far plane and distance
-        keyLight.shadow.camera.far = shadowSize * 6;
+        keyLight.shadow.camera.near = shadowSize * 0.5;
+        keyLight.shadow.camera.far = shadowSize * 3;
         keyLight.shadow.camera.updateProjectionMatrix();
 
         // Position key light relative to level center (front-right-above)
         keyLight.position.set(shadowSize * 0.8, shadowSize * 0.6, shadowSize * 0.6);
         keyLight.target.position.set(0, 0, 0);
+        keyLight.power = 10 * Math.pow(shadowSize, 0.5);  // Scale power with shadow area for consistent brightness
 
         // Update fill light position (front-left)
         if (fillLight) {
@@ -1055,16 +1160,16 @@ function redraw3D() {
  * Toggle between 2D and 3D rendering
  */
 function toggle3DRenderer() {
-    use3DRenderer = !use3DRenderer;
+    window.use3DRenderer = !window.use3DRenderer;
 
     const canvas2d = document.getElementById('gameCanvas');
     const canvas3d = document.getElementById('gameCanvas3D');
 
-    if (use3DRenderer) {
+    if (window.use3DRenderer) {
         if (!renderer3d) {
             if (!init3DRenderer()) {
                 // Init failed, stay in 2D mode
-                use3DRenderer = false;
+                window.use3DRenderer = false;
                 return;
             }
         }
@@ -1082,7 +1187,7 @@ function toggle3DRenderer() {
         redraw();
     }
 
-    console.log('Rendering mode: ' + (use3DRenderer ? '3D' : '2D'));
+    console.log('Rendering mode: ' + (window.use3DRenderer ? '3D' : '2D'));
 }
 
 // Keyboard shortcuts for camera control
@@ -1094,7 +1199,7 @@ document.addEventListener('keydown', function(e) {
         return;
     }
 
-    if (!use3DRenderer || !renderer3d) return;
+    if (!window.use3DRenderer || !renderer3d) return;
 
     // Only handle camera controls when not in text mode
     if (typeof textMode !== 'undefined' && textMode) return;
@@ -1108,3 +1213,8 @@ if (document.readyState === 'loading') {
 } else {
     setTimeout(init3DRenderer, 100);
 }
+
+// Allow access from other files.
+window.redraw3D = redraw3D;
+window.snapshotLevelState = snapshotLevelState;
+window.use3DRenderer = true;
