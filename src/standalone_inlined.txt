@@ -8063,17 +8063,19 @@ EasingFunctions = {
  * Each pixel in the original sprites becomes a cube in 3D space.
  */
 
+import * as THREE from 'three';
+
 // Three.js globals
 let renderer3d = null;
 let scene3d = null;
 let camera3d = null;
 let container3d = null;  // The DOM container element
-let cubeGeometry = null;
-let use3DRenderer = true; // Toggle between 2D and 3D rendering
 let groundPlane = null;  // Ground plane to receive shadows
 
 // Sprite geometry caching - merged geometry per sprite type
 let spriteGeometries = {};  // spriteIndex -> THREE.BufferGeometry (merged cubes with vertex colors)
+let spriteMinAlpha = {};    // spriteIndex -> minimum alpha value (1.0 = fully opaque)
+let spriteGlassMaterials = {};  // spriteIndex -> MeshPhysicalMaterial (per-sprite glass with custom transmission)
 let spriteMaterial = null;  // Shared material using vertex colors
 let clayNormalMap = null;   // Normal map texture for clay look
 
@@ -8101,6 +8103,7 @@ const CAMERA_FOV = 40;
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 1000;
 const CUBE_SIZE = 1;
+const SPRITE_HEIGHT = 0.2;  // Sprite height as fraction of grid cell size.
 const CAMERA_DISTANCE = 1.5;
 
 // Camera position and rotation
@@ -8109,15 +8112,55 @@ let cameraAngleX = 1.2;
 let cameraAngleY = 0.0;
 
 /**
+ * Add per-instance UV rotation to a material using onBeforeCompile.
+ * This allows each instance of an InstancedMesh to have its own UV rotation,
+ * breaking up visible tiling patterns in textures/normal maps.
+ */
+function addInstancedUvRotation(material) {
+    material.onBeforeCompile = (shader) => {
+        // Add the instance attribute declaration to vertex shader
+        shader.vertexShader = shader.vertexShader.replace(
+            '#include <common>',
+            `#include <common>
+            attribute float instanceUvRotation;
+            varying float vUvRotation;`
+        );
+        // Pass the rotation to fragment shader
+        shader.vertexShader = shader.vertexShader.replace(
+            '#include <uv_vertex>',
+            `#include <uv_vertex>
+            vUvRotation = instanceUvRotation;`
+        );
+        // Declare the varying in fragment shader
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <common>',
+            `#include <common>
+            varying float vUvRotation;`
+        );
+        // Rotate UVs before normal map lookup
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <normal_fragment_maps>',
+            `// Rotate UVs for normal map sampling
+            #ifdef USE_NORMALMAP
+            vec2 rotatedUv = vNormalMapUv;
+            float uvCos = cos(vUvRotation);
+            float uvSin = sin(vUvRotation);
+            rotatedUv = vec2(
+                rotatedUv.x * uvCos - rotatedUv.y * uvSin,
+                rotatedUv.x * uvSin + rotatedUv.y * uvCos
+            );
+            vec3 mapN = texture2D( normalMap, rotatedUv ).xyz * 2.0 - 1.0;
+            mapN.xy *= normalScale;
+            normal = normalize( tbn * mapN );
+            #endif`
+        );
+    };
+}
+
+/**
  * Initialize the Three.js renderer, scene, and camera
  */
 function init3DRenderer() {
-    if (!window.THREE) {
-        console.error('Three.js not loaded! Falling back to 2D renderer.');
-        use3DRenderer = false;
-        return false;
-    }
-
     // Get the canvas container - try different selectors for play.html vs editor.html
     let container = document.querySelector('.gameContainer');
     if (!container) {
@@ -8130,7 +8173,7 @@ function init3DRenderer() {
     }
     if (!container) {
         console.error('Game container not found!');
-        use3DRenderer = false;
+        window.use3DRenderer = false;
         return false;
     }
 
@@ -8149,6 +8192,9 @@ function init3DRenderer() {
     // Enable high-quality VSM shadows (Variance Shadow Maps)
     renderer3d.shadowMap.enabled = true;
     renderer3d.shadowMap.type = THREE.VSMShadowMap;  // VSM for smooth soft shadows
+    renderer3d.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer3d.toneMappingExposure = 1;
+
     renderer3d.domElement.id = 'gameCanvas3D';
     renderer3d.domElement.style.position = 'absolute';
     renderer3d.domElement.style.top = '0';
@@ -8190,21 +8236,21 @@ function init3DRenderer() {
     // === THREE-POINT LIGHTING SYSTEM ===
 
     // Ambient light - very low, just to prevent pure black shadows
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.15);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
     scene3d.add(ambientLight);
 
     // KEY LIGHT - Main light, warm color, casts shadows
     // Positioned front-right, above the scene
-    keyLight = new THREE.SpotLight(0xffeedd, 1);  // Warm white, higher intensity for spot
+    keyLight = new THREE.SpotLight(0xffeedd);  // Warm white
     keyLight.angle = Math.PI / 4;  // Cone angle (45 degrees)
     keyLight.penumbra = 0.5;  // Soft edge falloff
-    keyLight.decay = 1.5;  // Light decay with distance
+    keyLight.decay = 0.5;  // Light decay with distance
     keyLight.castShadow = true;
 
     // Shadow settings for spot light
     keyLight.shadow.mapSize.width = 2048;
     keyLight.shadow.mapSize.height = 2048;
-    keyLight.shadow.camera.near = 20;
+    keyLight.shadow.camera.near = 100;
     keyLight.shadow.camera.far = 200;
     keyLight.shadow.camera.fov = 50;
 
@@ -8220,12 +8266,9 @@ function init3DRenderer() {
 
     // FILL LIGHT - Soft light, cool color, no shadows
     // Positioned front-left, lower than key light
-    fillLight = new THREE.DirectionalLight(0xddeeff, 0.5);  // Cool blue-white
+    fillLight = new THREE.DirectionalLight(0xddeeff, 1);  // Cool blue-white
     fillLight.castShadow = false;  // Fill light doesn't cast shadows
     scene3d.add(fillLight);
-
-    // Create reusable cube geometry
-    cubeGeometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
 
     // Load clay normal map texture (optional - works without it for standalone export)
     const textureLoader = new THREE.TextureLoader();
@@ -8255,6 +8298,7 @@ function init3DRenderer() {
         roughness: 0.7,
         metalness: 0.0
     });
+    addInstancedUvRotation(spriteMaterial);
 
     // Handle window resize
     window.addEventListener('resize', onWindowResize3D, false);
@@ -8287,6 +8331,31 @@ function updateCameraPosition() {
 
     camera3d.position.set(x, y, z);
     camera3d.lookAt(0, 0, 0);
+}
+
+/**
+ * Parse a color string, handling #RRGGBBAA format with alpha.
+ * Returns { color: THREE.Color, alpha: number (0-1) }
+ */
+function parseColorWithAlpha(colorStr) {
+    if (!colorStr) return { color: new THREE.Color(0, 0, 0), alpha: 0 };
+    const str = colorStr.toLowerCase().trim();
+
+    // Check for 8-character hex with alpha (#RRGGBBAA)
+    if (str.match(/^#[0-9a-f]{8}$/)) {
+        const r = parseInt(str.slice(1, 3), 16) / 255;
+        const g = parseInt(str.slice(3, 5), 16) / 255;
+        const b = parseInt(str.slice(5, 7), 16) / 255;
+        const a = parseInt(str.slice(7, 9), 16) / 255;
+        return { color: new THREE.Color(r, g, b), alpha: a };
+    }
+
+    // Standard color parsing (no alpha or full opacity)
+    try {
+        return { color: new THREE.Color(str), alpha: 1.0 };
+    } catch (e) {
+        return { color: new THREE.Color(0, 0, 0), alpha: 0 };
+    }
 }
 
 /**
@@ -8332,6 +8401,18 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
     if (cubeCount === 0) return null;
 
+    // Find minimum alpha value across all colors in the sprite
+    let minAlpha = 1.0;
+    for (const c of colors) {
+        if (c && c !== 'transparent' && c !== '#00000000') {
+            const parsed = parseColorWithAlpha(c);
+            if (parsed.alpha < minAlpha) {
+                minAlpha = parsed.alpha;
+            }
+        }
+    }
+    spriteMinAlpha[spriteIndex] = minAlpha;
+
     // Create merged geometry
     const positions = [];
     const normals = [];
@@ -8340,26 +8421,21 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     const indices = [];
 
     const halfSize = CUBE_SIZE / 2;
+    const halfSizeVertical = SPRITE_HEIGHT * CUBE_SIZE * state.sprite_size / 2;
     const bevel = CUBE_SIZE * 0.25;  // Bevel size for rounding
     const uvScale = 0.1;  // Scale factor for UV tiling
 
-    // Random rotation angle for this sprite's normal map (to reduce tiling repetition)
-    const uvRotation = Math.random() * Math.PI * 2;
-    const uvCos = Math.cos(uvRotation);
-    const uvSin = Math.sin(uvRotation);
-
     let vertexOffset = 0;
 
-    // Helper to add a vertex with UV based on position (rotated by random angle)
+    // Helper to add a vertex with UV based on position
     function addVertex(x, y, z, nx, ny, nz, color) {
         positions.push(x, y, z);
         normals.push(nx, ny, nz);
         vertexColors.push(color.r, color.g, color.b);
         // UV coordinates: use x+y for u, z+y for v (so vertical faces get texture too)
-        // Apply random rotation to reduce visible tiling
         const u = (x + y) * uvScale;
         const v = (z + y) * uvScale;
-        uvs.push(u * uvCos - v * uvSin, u * uvSin + v * uvCos);
+        uvs.push(u, v);
     }
 
     // Helper to add a triangle
@@ -8379,7 +8455,8 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             const colorIndex = spriteData[py][px];
             const color = colors[colorIndex];
-            const threeColor = new THREE.Color(color.toLowerCase());
+            const parsed = parseColorWithAlpha(color);
+            const threeColor = parsed.color;
 
             // Offset for this cube within the sprite
             const offsetX = px * CUBE_SIZE;
@@ -8420,10 +8497,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             // - Inner bottom face (inset, at full depth)
 
             // Y coordinates for the geometry
-            const innerTopY = halfSize;              // Top face stays at full height
-            const outerTopY = halfSize - bevel;      // Outer edge is lowered by bevel
-            const outerBotY = -halfSize + bevel;     // Outer bottom edge is raised by bevel
-            const innerBotY = -halfSize;             // Bottom face at full depth
+            const innerTopY = halfSizeVertical;              // Top face stays at full height
+            const outerTopY = halfSizeVertical - bevel;      // Outer edge is lowered by bevel
+            const outerBotY = -halfSizeVertical + bevel;     // Outer bottom edge is raised by bevel
+            const innerBotY = -halfSizeVertical;             // Bottom face at full depth
 
             // Define corner positions
             // Back-left corner (-X, -Z)
@@ -8486,38 +8563,68 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             }
 
             // ===== BUILD OUTER PERIMETER (original corners, no inset) =====
+            // Also track which segments are exposed (need vertical walls)
             let outerVerts = [];
+            let outerEdgeExposed = [];  // true if segment from outerVerts[i] to outerVerts[i+1] needs walls
 
             // Back-left corner
             if (cornerBackLeft && (bevelLeft || bevelBack)) {
-                if (bevelLeft) outerVerts.push([blX, blZ + bevel]);
-                if (bevelBack) outerVerts.push([blX + bevel, blZ]);
+                if (bevelLeft) {
+                    outerVerts.push([blX, blZ + bevel]);
+                    outerEdgeExposed.push(true);  // Corner bevel segment
+                }
+                if (bevelBack) {
+                    outerVerts.push([blX + bevel, blZ]);
+                    outerEdgeExposed.push(true);  // Back edge starts here
+                }
             } else {
                 outerVerts.push([blX, blZ]);
+                outerEdgeExposed.push(bevelBack);  // Back edge
             }
 
             // Back-right corner
             if (cornerBackRight && (bevelRight || bevelBack)) {
-                if (bevelBack) outerVerts.push([brX - bevel, brZ]);
-                if (bevelRight) outerVerts.push([brX, brZ + bevel]);
+                if (bevelBack) {
+                    outerVerts.push([brX - bevel, brZ]);
+                    outerEdgeExposed.push(true);  // Corner bevel segment
+                }
+                if (bevelRight) {
+                    outerVerts.push([brX, brZ + bevel]);
+                    outerEdgeExposed.push(true);  // Right edge starts here
+                }
             } else {
                 outerVerts.push([brX, brZ]);
+                outerEdgeExposed.push(bevelRight);  // Right edge
             }
 
             // Front-right corner
             if (cornerFrontRight && (bevelRight || bevelFront)) {
-                if (bevelRight) outerVerts.push([frX, frZ - bevel]);
-                if (bevelFront) outerVerts.push([frX - bevel, frZ]);
+                if (bevelRight) {
+                    outerVerts.push([frX, frZ - bevel]);
+                    outerEdgeExposed.push(true);  // Corner bevel segment
+                }
+                if (bevelFront) {
+                    outerVerts.push([frX - bevel, frZ]);
+                    outerEdgeExposed.push(true);  // Front edge starts here
+                }
             } else {
                 outerVerts.push([frX, frZ]);
+                outerEdgeExposed.push(bevelFront);  // Front edge
             }
 
             // Front-left corner
             if (cornerFrontLeft && (bevelLeft || bevelFront)) {
-                if (bevelFront) outerVerts.push([flX + bevel, flZ]);
-                if (bevelLeft) outerVerts.push([flX, flZ - bevel]);
+                if (bevelFront) {
+                    outerVerts.push([flX + bevel, flZ]);
+                    outerEdgeExposed.push(true);  // Corner bevel segment
+                }
+                if (bevelLeft) {
+                    outerVerts.push([flX, flZ - bevel]);
+                    outerEdgeExposed.push(true);  // Left edge (wraps to start)
+                }
             } else {
                 outerVerts.push([flX, flZ]);
+                outerEdgeExposed.push(bevelLeft);  // Left edge (wraps to start)
             }
 
             // ===== INNER TOP FACE =====
@@ -8531,8 +8638,11 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             // ===== TOP BEVEL STRIP =====
             // Connect inner perimeter (at innerTopY) to outer perimeter (at outerTopY)
+            // Only generate bevels for exposed edges
             const n = innerVerts.length;
             for (let i = 0; i < n; i++) {
+                if (!outerEdgeExposed[i]) continue;  // Skip internal edges
+
                 const i2 = (i + 1) % n;
                 const inner1 = innerVerts[i];
                 const inner2 = innerVerts[i2];
@@ -8562,7 +8672,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             // ===== VERTICAL SIDES =====
             // Connect outer perimeter at outerTopY to outer perimeter at outerBotY
+            // Only generate walls for exposed edges (where outerEdgeExposed is true)
             for (let i = 0; i < n; i++) {
+                if (!outerEdgeExposed[i]) continue;  // Skip internal edges
+
                 const i2 = (i + 1) % n;
                 const t1 = outerVerts[i];
                 const t2 = outerVerts[i2];
@@ -8584,7 +8697,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             // ===== BOTTOM BEVEL STRIP =====
             // Connect outer perimeter (at outerBotY) to inner perimeter (at innerBotY)
+            // Only generate bevels for exposed edges
             for (let i = 0; i < n; i++) {
+                if (!outerEdgeExposed[i]) continue;  // Skip internal edges
+
                 const i2 = (i + 1) % n;
                 const outer1 = outerVerts[i];
                 const outer2 = outerVerts[i2];
@@ -8670,6 +8786,12 @@ function clearScene3D() {
     animatedMeshes = [];
     // Clear sprite geometries when switching games (sprites may have changed)
     spriteGeometries = {};
+    spriteMinAlpha = {};
+    // Dispose and clear per-sprite glass materials
+    for (const key in spriteGlassMaterials) {
+        spriteGlassMaterials[key].dispose();
+    }
+    spriteGlassMaterials = {};
 }
 
 /**
@@ -8733,55 +8855,106 @@ function detectMovements() {
 
     const movements = [];
 
-    // For each object type, find what moved
+    // For each object type, match old positions to new positions using constraint propagation.
+    // This handles lines of objects moving together correctly by considering adjacency.
     for (const objectIndex in newMap) {
         const oldPositions = oldMap[objectIndex] || [];
         const newPositions = newMap[objectIndex];
 
-        // First pass: mark all positions that exist in both old and new as "used"
-        // These objects stayed in place and don't need animation
-        const usedOld = new Set();
-        const usedNew = new Set();
+        if (oldPositions.length === 0) continue;  // Newly spawned objects
 
-        for (const newPos of newPositions) {
-            if (oldPositions.includes(newPos)) {
-                // Object exists in same position - it didn't move
-                usedOld.add(newPos);
-                usedNew.add(newPos);
+        // Convert new positions to a Set for fast lookup
+        const newPosSet = new Set(newPositions);
+
+        // For each old position, compute possible new positions (stay, or move 1 step in any direction)
+        // Map: oldPos -> [possible newPos values]
+        const possibilities = {};
+        for (const oldPos of oldPositions) {
+            const oldX = (oldPos / previousLevelState.height) | 0;
+            const oldY = oldPos % previousLevelState.height;
+
+            const candidates = [];
+            // Check stay in place and 4 adjacent cells
+            const offsets = [
+                [0, 0],   // stay
+                [-1, 0],  // left
+                [1, 0],   // right
+                [0, -1],  // up
+                [0, 1],   // down
+            ];
+            for (const [dx, dy] of offsets) {
+                const newX = oldX + dx;
+                const newY = oldY + dy;
+                if (newX >= 0 && newX < curLevel.width && newY >= 0 && newY < curLevel.height) {
+                    const newPos = newY + newX * curLevel.height;
+                    if (newPosSet.has(newPos)) {
+                        candidates.push(newPos);
+                    }
+                }
             }
+            possibilities[oldPos] = candidates;
         }
 
-        // Second pass: match remaining positions by proximity
-        for (const newPos of newPositions) {
-            if (usedNew.has(newPos)) continue;  // Already matched (stayed in place)
+        // Iteratively assign old positions to new positions
+        const assignedNew = new Set();  // New positions already assigned
+        const solution = {};  // oldPos -> newPos
 
-            const newX = (newPos / curLevel.height) | 0;
-            const newY = newPos % curLevel.height;
+        // Keep assigning until all old positions are processed
+        const unassigned = new Set(oldPositions);
+        let toDelete = oldPositions.length - newPositions.length;
 
+        while (unassigned.size > 0) {
+            // Find the old position with the fewest remaining possibilities
             let bestOldPos = null;
-            let bestDist = Infinity;
+            let bestCount = Infinity;
 
-            for (const oldPos of oldPositions) {
-                if (usedOld.has(oldPos)) continue;
+            for (const oldPos of unassigned) {
+                // Filter out already-assigned new positions
+                const available = possibilities[oldPos].filter(p => !assignedNew.has(p));
+                possibilities[oldPos] = available;  // Update in place
 
-                const oldX = (oldPos / previousLevelState.height) | 0;
-                const oldY = oldPos % previousLevelState.height;
-
-                const dist = Math.abs(newX - oldX) + Math.abs(newY - oldY);
-                if (dist < bestDist && dist > 0 && dist <= 2) {  // Only animate small moves
-                    bestDist = dist;
+                if (available.length < bestCount) {
+                    bestCount = available.length;
                     bestOldPos = oldPos;
                 }
             }
 
-            if (bestOldPos !== null) {
-                usedOld.add(bestOldPos);
-                movements.push({
-                    objectIndex: parseInt(objectIndex),
-                    fromPosIndex: bestOldPos,
-                    toPosIndex: newPos
-                });
+            if (bestOldPos === null) break;  // Should not happen
+
+            unassigned.delete(bestOldPos);
+            const ps = possibilities[bestOldPos];
+
+            // If there is nowhere to move or we have to delete some objects and this one can't stay in place, then remove it.
+            if (bestCount === 0 || (toDelete > 0 && !ps.includes(bestOldPos))) {
+                toDelete--;
+                continue;
             }
+
+            // Choose one of the possibilities.
+            let chosenNew = ps[0];
+            for (const pos of ps) {
+                // Prefer to stay in place, or move to a previously empty cell.
+                if (pos === bestOldPos || !possibilities[pos]) {
+                    chosenNew = pos;
+                    break;
+                }
+            }
+            solution[bestOldPos] = chosenNew;
+            assignedNew.add(chosenNew);
+        }
+
+        // Generate movements from the solution
+        for (const oldPosStr in solution) {
+            const oldPos = parseInt(oldPosStr);
+            const newPos = solution[oldPosStr];
+
+            if (oldPos === newPos) continue;  // Object stayed in place
+
+            movements.push({
+                objectIndex: parseInt(objectIndex),
+                fromPosIndex: oldPos,
+                toPosIndex: newPos
+            });
         }
     }
 
@@ -8853,17 +9026,42 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
 
     const baseX = gridX * cellSizeX - totalWidth / 2;
     const baseZ = gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length);
-    const baseY = layer * CUBE_SIZE;
+    const baseY = layer * SPRITE_HEIGHT * CUBE_SIZE * state.sprite_size;
 
     // Get or create the InstancedMesh for this sprite
     let mesh = instancedMeshes[spriteIndex];
     if (!mesh) {
         // Create new InstancedMesh with generous max count
+        // Use glass material with transmission based on min alpha if sprite has transparency
         const maxInstances = 1000;
-        mesh = new THREE.InstancedMesh(geometry, spriteMaterial, maxInstances);
+        const minAlpha = spriteMinAlpha[spriteIndex];
+        let material = spriteMaterial;
+        if (minAlpha < 1.0) {
+            // Create per-sprite glass material with transmission based on alpha
+            // Lower alpha = higher transmission (more transparent)
+            if (!spriteGlassMaterials[spriteIndex]) {
+                spriteGlassMaterials[spriteIndex] = new THREE.MeshPhysicalMaterial({
+                    vertexColors: true,
+                    roughness: 0.3,
+                    metalness: 0.0,
+                    transmission: 1.0 - minAlpha,
+                    thickness: 2,
+                    ior: 1.5,
+                    transparent: true,
+                    side: THREE.DoubleSide,
+                });
+                addInstancedUvRotation(spriteGlassMaterials[spriteIndex]);
+            }
+            material = spriteGlassMaterials[spriteIndex];
+        }
+        mesh = new THREE.InstancedMesh(geometry, material, maxInstances);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.count = 0;
+        // Add per-instance UV rotation attribute
+        const uvRotations = new Float32Array(maxInstances);
+        mesh.geometry.setAttribute('instanceUvRotation',
+            new THREE.InstancedBufferAttribute(uvRotations, 1));
         instancedMeshes[spriteIndex] = mesh;
         instanceCounts[spriteIndex] = 0;
         levelGroup.add(mesh);
@@ -8885,7 +9083,7 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     if (animFrom) {
         // Start at animation origin
         const startBaseX = animFrom.gridX * cellSizeX - totalWidth / 2;
-        const startBaseZ = animFrom.gridY * cellSizeZ - totalHeight / 2;
+        const startBaseZ = animFrom.gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length);
         matrix.setPosition(startBaseX, baseY, startBaseZ);
 
         // Track for animation
@@ -8903,13 +9101,18 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     }
 
     mesh.setMatrixAt(instanceIndex, matrix);
+
+    // Set instance UV rotation based on position. Basically random, but stable.
+    const uvRotAttr = mesh.geometry.getAttribute('instanceUvRotation');
+    uvRotAttr.setX(instanceIndex, (baseX + baseZ * Math.E) * 1000);
+    uvRotAttr.needsUpdate = true;
 }
 
 /**
  * Main 3D redraw function - replaces the 2D redraw() when in 3D mode
  */
 function redraw3D() {
-    if (!use3DRenderer || !renderer3d || !scene3d || !camera3d) {
+    if (!window.use3DRenderer || !renderer3d || !scene3d || !camera3d) {
         return false;  // Fall back to 2D
     }
 
@@ -8999,12 +9202,14 @@ function redraw3D() {
         const shadowSize = Math.max(visibleWidth, visibleHeight) * state.sprite_size * 0.7;
 
         // SpotLight uses perspective shadow camera - update far plane and distance
-        keyLight.shadow.camera.far = shadowSize * 6;
+        keyLight.shadow.camera.near = shadowSize * 0.5;
+        keyLight.shadow.camera.far = shadowSize * 3;
         keyLight.shadow.camera.updateProjectionMatrix();
 
         // Position key light relative to level center (front-right-above)
         keyLight.position.set(shadowSize * 0.8, shadowSize * 0.6, shadowSize * 0.6);
         keyLight.target.position.set(0, 0, 0);
+        keyLight.power = 10 * Math.pow(shadowSize, 0.5);  // Scale power with shadow area for consistent brightness
 
         // Update fill light position (front-left)
         if (fillLight) {
@@ -9043,15 +9248,24 @@ function redraw3D() {
     }
 
     // Render all objects in the visible area
-    let layerCounter = {};  // Track layers per cell
+
+    // Helper function to find which collision layer group an object belongs to
+    function getCollisionGroupIndex(objectId) {
+        for (let g = 0; g < state.collisionLayerGroups.length; g++) {
+            const group = state.collisionLayerGroups[g];
+            if (objectId >= group.firstObjectNo && objectId < group.firstObjectNo + group.numObjects) {
+                return g;
+            }
+        }
+        return -1;
+    }
 
     for (let i = mini; i < maxi; i++) {
         for (let j = minj; j < maxj; j++) {
             const posIndex = j + i * curLevel.height;
             const posMask = curLevel.getCellInto(posIndex, _o12);
-
-            const cellKey = `${i},${j}`;
-            layerCounter[cellKey] = layerCounter[cellKey] || 0;
+            let height = 0;
+            let lastGroupIndex = -1;
 
             for (let k = 0; k < state.objectCount; k++) {
                 if (posMask.get(k) != 0 && getOrCreateSpriteGeometry(k)) {
@@ -9068,8 +9282,16 @@ function redraw3D() {
                         };
                     }
 
-                    createSprite3D(k, i - mini, j - minj, layerCounter[cellKey], visibleWidth, visibleHeight, animFrom);
-                    layerCounter[cellKey]++;
+                    // When there are multiple collision layer groups, use them for layering.
+                    const groupIndex = getCollisionGroupIndex(k);
+                    if (state.collisionLayerGroups.length <= 1 || groupIndex !== lastGroupIndex) {
+                        height += 1;
+                    } else {
+                        height += 0.1;
+                    }
+                    lastGroupIndex = groupIndex;
+
+                    createSprite3D(k, i - mini, j - minj, height, visibleWidth, visibleHeight, animFrom);
                 }
             }
         }
@@ -9098,16 +9320,16 @@ function redraw3D() {
  * Toggle between 2D and 3D rendering
  */
 function toggle3DRenderer() {
-    use3DRenderer = !use3DRenderer;
+    window.use3DRenderer = !window.use3DRenderer;
 
     const canvas2d = document.getElementById('gameCanvas');
     const canvas3d = document.getElementById('gameCanvas3D');
 
-    if (use3DRenderer) {
+    if (window.use3DRenderer) {
         if (!renderer3d) {
             if (!init3DRenderer()) {
                 // Init failed, stay in 2D mode
-                use3DRenderer = false;
+                window.use3DRenderer = false;
                 return;
             }
         }
@@ -9125,7 +9347,7 @@ function toggle3DRenderer() {
         redraw();
     }
 
-    console.log('Rendering mode: ' + (use3DRenderer ? '3D' : '2D'));
+    console.log('Rendering mode: ' + (window.use3DRenderer ? '3D' : '2D'));
 }
 
 // Keyboard shortcuts for camera control
@@ -9137,7 +9359,7 @@ document.addEventListener('keydown', function(e) {
         return;
     }
 
-    if (!use3DRenderer || !renderer3d) return;
+    if (!window.use3DRenderer || !renderer3d) return;
 
     // Only handle camera controls when not in text mode
     if (typeof textMode !== 'undefined' && textMode) return;
@@ -9151,6 +9373,11 @@ if (document.readyState === 'loading') {
 } else {
     setTimeout(init3DRenderer, 100);
 }
+
+// Allow access from other files.
+window.redraw3D = redraw3D;
+window.snapshotLevelState = snapshotLevelState;
+window.use3DRenderer = true;
 
 </script>
 <script>
