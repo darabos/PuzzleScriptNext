@@ -236,16 +236,27 @@ a {
 <body>
 <div class="title"><h1 id="gametitle">PuzzleScript Game</h1></div>
 <div class="gameContainer">
-<canvas 
+<canvas
     id="gameCanvas" ></canvas>
-</div> 
+</div>
 <div class="footer">
 <span id="errormessage" style="color:red;"></span>
 <a id="homepagelink" href="https://github.com/david-pfx/PuzzleScriptNext">Made with PuzzlescriptNext</a> <span id="separator">|</span> <a id="hacklink" href="#">hack</a>
 </div>
 
 <!--___SCRIPTINSERT___-->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.183.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+window.THREE = THREE;
+</script>
 <script src="js/storagewrapper.js"></script>
 <script src="js/globalVariables.js"></script>
 <script src="js/debug_off.js"></script>

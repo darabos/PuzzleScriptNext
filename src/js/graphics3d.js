@@ -5,8 +5,6 @@
  * Each pixel in the original sprites becomes a cube in 3D space.
  */
 
-import * as THREE from 'three';
-
 // Three.js globals
 let renderer3d = null;
 let scene3d = null;

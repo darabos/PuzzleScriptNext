@@ -250,7 +250,18 @@ a {
 	} 
 </script>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.183.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+window.THREE = THREE;
+</script>
 <!--___SCRIPTINSERT___-->
 <script src="js/storagewrapper.js"></script>
 <script src="js/globalVariables.js"></script>
