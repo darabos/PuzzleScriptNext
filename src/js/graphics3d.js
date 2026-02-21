@@ -825,34 +825,106 @@ function detectMovements() {
 
         if (oldPositions.length === 0) continue;  // Newly spawned objects
 
-        // Build index mappings for the bipartite graph
-        const newPosToIdx = new Map();
-        newPositions.forEach((pos, idx) => newPosToIdx.set(pos, idx));
+        // Heuristic: detect simple push in a single direction.
+        // If each new position that wasn't old lines up with a disappeared position
+        // in a consistent direction, it's a push.
+        const oldPosSet = new Set(oldPositions);
         const newPosSet = new Set(newPositions);
+        const disappeared = oldPositions.filter(p => !newPosSet.has(p));
+        const appeared = newPositions.filter(p => !oldPosSet.has(p));
 
         const width = curLevel.width;
         const height = curLevel.height;
 
-        // Build adjacency lists:
-        // - adjStay[oldIdx] = [newIdx] if the cell stays in place (marked/preferred edges)
-        // - adj[oldIdx] = [newIdx, ...] for all reachable new positions
-        const adjStay = [];
-        const adj = oldPositions.map((oldPos, oldIdx) => {
+        if (disappeared.length > 0 && disappeared.length === appeared.length) {
+            // Check if all appeared positions are offset in the same direction from disappeared.
+            // The distance can be greater than 1 (e.g., pushing a row of 2 crates makes distance 2).
+            let consistentPush = true;
+            let pushDx = null;
+            let pushDy = null;
+
+            // Sort both arrays to pair them up
+            const disappearedSorted = [...disappeared].sort((a, b) => a - b);
+            const appearedSorted = [...appeared].sort((a, b) => a - b);
+
+            for (let i = 0; i < disappearedSorted.length; i++) {
+                const oldPos = disappearedSorted[i];
+                const newPos = appearedSorted[i];
+                const oldX = (oldPos / height) | 0;
+                const oldY = oldPos % height;
+                const newX = (newPos / height) | 0;
+                const newY = newPos % height;
+                const dx = newX - oldX;
+                const dy = newY - oldY;
+
+                // Must be purely horizontal or purely vertical (not diagonal, not zero)
+                if ((dx === 0) === (dy === 0)) {
+                    consistentPush = false;
+                    break;
+                }
+
+                // Normalize to unit direction
+                const unitDx = dx === 0 ? 0 : (dx > 0 ? 1 : -1);
+                const unitDy = dy === 0 ? 0 : (dy > 0 ? 1 : -1);
+
+                if (pushDx === null) {
+                    pushDx = unitDx;
+                    pushDy = unitDy;
+                } else if (unitDx !== pushDx || unitDy !== pushDy) {
+                    consistentPush = false;
+                    break;
+                }
+            }
+
+            if (consistentPush && pushDx !== null) {
+                // It's a simple push - move only objects along the disappearance/appearance lines
+                // For each pair, trace from disappearance to appearance and move those objects
+                for (let i = 0; i < disappearedSorted.length; i++) {
+                    const startPos = disappearedSorted[i];
+                    const endPos = appearedSorted[i];
+                    const startX = (startPos / height) | 0;
+                    const startY = startPos % height;
+                    const endX = (endPos / height) | 0;
+                    const endY = endPos % height;
+
+                    // Walk from start to end (exclusive of end, which is the new position)
+                    let x = startX;
+                    let y = startY;
+                    while (x !== endX || y !== endY) {
+                        const oldPos = y + x * height;
+                        const newX = x + pushDx;
+                        const newY = y + pushDy;
+                        const newPos = newY + newX * height;
+
+                        if (oldPosSet.has(oldPos) && newPosSet.has(newPos)) {
+                            movements.push({
+                                objectIndex: parseInt(objectIndex),
+                                fromPosIndex: oldPos,
+                                toPosIndex: newPos
+                            });
+                        }
+
+                        x += pushDx;
+                        y += pushDy;
+                    }
+                }
+                continue;  // Skip the general matching algorithm
+            }
+        }
+
+        // Build index mappings for the bipartite graph
+        const newPosToIdx = new Map();
+        newPositions.forEach((pos, idx) => newPosToIdx.set(pos, idx));
+
+        // Build adjacency list: adj[oldIdx] = [newIdx, ...] for reachable new positions
+        const adj = oldPositions.map(oldPos => {
             const oldX = (oldPos / previousLevelState.height) | 0;
             const oldY = oldPos % previousLevelState.height;
 
             const neighbors = [];
-            // Check same cell (marked edge - preferred)
-            if (newPosSet.has(oldPos)) {
-                const stayIdx = newPosToIdx.get(oldPos);
-                adjStay[oldIdx] = [stayIdx];
-                neighbors.push(stayIdx);
-            } else {
-                adjStay[oldIdx] = [];
-            }
-
-            // Check 4 adjacent cells
+            // Check same cell and 4 adjacent cells
             const offsets = [
+                [0, 0],   // same cell
                 [-1, 0],  // left
                 [1, 0],   // right
                 [0, -1],  // up
@@ -874,9 +946,7 @@ function detectMovements() {
 
         // Kuhn's algorithm (Hungarian algorithm) for maximum bipartite matching.
         // matchNew[newIdx] = oldIdx that is matched to it, or -1 if unmatched.
-        // matchOld[oldIdx] = newIdx that is matched to it, or -1 if unmatched.
         const matchNew = new Array(newPositions.length).fill(-1);
-        const matchOld = new Array(oldPositions.length).fill(-1);
 
         // Try to find an augmenting path starting from oldIdx using DFS.
         function tryAugment(oldIdx, visited) {
@@ -884,114 +954,20 @@ function detectMovements() {
                 if (visited[newIdx]) continue;
                 visited[newIdx] = true;
 
-                const currentMatch = matchNew[newIdx];
-
-                // If unmatched, we can take it
-                if (currentMatch === -1) {
+                // If newIdx is unmatched, or we can find an alternative augmenting path
+                // for its current match, then match oldIdx to newIdx.
+                if (matchNew[newIdx] === -1 || tryAugment(matchNew[newIdx], visited)) {
                     matchNew[newIdx] = oldIdx;
-                    matchOld[oldIdx] = newIdx;
-                    return true;
-                }
-
-                // Try to find alternative augmenting path for current match
-                if (tryAugment(currentMatch, visited)) {
-                    matchNew[newIdx] = oldIdx;
-                    matchOld[oldIdx] = newIdx;
                     return true;
                 }
             }
             return false;
         }
 
-        // Phase 1: Find maximum matching using all edges.
+        // Find maximum matching by trying to augment from each old position
         for (let oldIdx = 0; oldIdx < oldPositions.length; oldIdx++) {
             const visited = new Array(newPositions.length).fill(false);
             tryAugment(oldIdx, visited);
-        }
-
-        // Phase 2: Improve matching by upgrading to stay-in-place edges where possible.
-        // Iterate until no improvement found (greedy single-swap can miss global optimum).
-        // For each swap, compare total stay count before/after to decide if we keep it.
-
-        // Helper to count total stay edges in current matching
-        function countStayEdges() {
-            let count = 0;
-            for (let i = 0; i < oldPositions.length; i++) {
-                if (adjStay[i].length > 0 && matchOld[i] === adjStay[i][0]) count++;
-            }
-            return count;
-        }
-
-        // Track stay edges that were locked in during Phase 2 improvements.
-        // Only these should be protected from being disrupted by later augmentations.
-        const lockedStayEdges = new Set();
-
-        let improved = true;
-        while (improved) {
-            improved = false;
-
-            for (let l = 0; l < oldPositions.length; l++) {
-                if (adjStay[l].length === 0) continue;  // No stay edge for this node
-                const r_stay = adjStay[l][0];
-                if (matchOld[l] === r_stay) continue;  // Already using stay edge
-
-                const l_prime = matchNew[r_stay];  // Who currently has r_stay (-1 if free)
-                const r_prime = matchOld[l];  // l's current match (-1 if unmatched)
-
-                // Count stay edges before swap
-                const stayCountBefore = countStayEdges();
-
-                if (l_prime === -1) {
-                    // r_stay is unmatched - just reassign l to use its stay edge
-                    if (r_prime !== -1) matchNew[r_prime] = -1;
-                    matchOld[l] = r_stay;
-                    matchNew[r_stay] = l;
-                    // This always improves (we gain a stay edge, lose nothing)
-                    lockedStayEdges.add(r_stay);
-                    improved = true;
-                    continue;
-                }
-
-                // r_stay is matched to l_prime. Try to swap: give l the stay edge,
-                // and find a new match for l_prime.
-
-                // Save state for potential revert
-                const savedMatchNew = matchNew.slice();
-                const savedMatchOld = matchOld.slice();
-
-                // Do the swap
-                if (r_prime !== -1) matchNew[r_prime] = -1;
-                matchOld[l] = r_stay;
-                matchNew[r_stay] = l;
-                matchOld[l_prime] = -1;
-
-                // Try to find a new match for l_prime
-                // Mark only stay edges that were locked in during Phase 2 as visited,
-                // to prevent augmenting paths from disrupting confirmed improvements.
-                const visited = new Array(newPositions.length).fill(false);
-                for (const lockedIdx of lockedStayEdges) {
-                    visited[lockedIdx] = true;
-                }
-                // Also protect the edge we just claimed
-                visited[r_stay] = true;
-
-                if (tryAugment(l_prime, visited)) {
-                    // Swap succeeded - check if total stay count improved
-                    const stayCountAfter = countStayEdges();
-                    if (stayCountAfter > stayCountBefore) {
-                        lockedStayEdges.add(r_stay);
-                        improved = true;  // Keep the swap
-                    } else {
-                        // No improvement - revert
-                        for (let i = 0; i < matchNew.length; i++) matchNew[i] = savedMatchNew[i];
-                        for (let i = 0; i < matchOld.length; i++) matchOld[i] = savedMatchOld[i];
-                    }
-                } else {
-                    // Can't find match for l_prime - revert
-                    for (let i = 0; i < matchNew.length; i++) matchNew[i] = savedMatchNew[i];
-                    for (let i = 0; i < matchOld.length; i++) matchOld[i] = savedMatchOld[i];
-                }
-            }
         }
 
         // Extract movements from the matching
