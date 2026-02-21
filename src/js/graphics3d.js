@@ -54,6 +54,52 @@ let cameraAngleX = 1.2;
 let cameraAngleY = 0.0;
 
 /**
+ * Add per-instance UV rotation to a material using onBeforeCompile.
+ * This allows each instance of an InstancedMesh to have its own UV rotation,
+ * breaking up visible tiling patterns in textures/normal maps.
+ */
+function addInstancedUvRotation(material) {
+    material.onBeforeCompile = (shader) => {
+        // Add the instance attribute declaration to vertex shader
+        shader.vertexShader = shader.vertexShader.replace(
+            '#include <common>',
+            `#include <common>
+            attribute float instanceUvRotation;
+            varying float vUvRotation;`
+        );
+        // Pass the rotation to fragment shader
+        shader.vertexShader = shader.vertexShader.replace(
+            '#include <uv_vertex>',
+            `#include <uv_vertex>
+            vUvRotation = instanceUvRotation;`
+        );
+        // Declare the varying in fragment shader
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <common>',
+            `#include <common>
+            varying float vUvRotation;`
+        );
+        // Rotate UVs before normal map lookup
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <normal_fragment_maps>',
+            `// Rotate UVs for normal map sampling
+            #ifdef USE_NORMALMAP
+            vec2 rotatedUv = vNormalMapUv;
+            float uvCos = cos(vUvRotation);
+            float uvSin = sin(vUvRotation);
+            rotatedUv = vec2(
+                rotatedUv.x * uvCos - rotatedUv.y * uvSin,
+                rotatedUv.x * uvSin + rotatedUv.y * uvCos
+            );
+            vec3 mapN = texture2D( normalMap, rotatedUv ).xyz * 2.0 - 1.0;
+            mapN.xy *= normalScale;
+            normal = normalize( tbn * mapN );
+            #endif`
+        );
+    };
+}
+
+/**
  * Initialize the Three.js renderer, scene, and camera
  */
 function init3DRenderer() {
@@ -194,6 +240,7 @@ function init3DRenderer() {
         roughness: 0.7,
         metalness: 0.0
     });
+    addInstancedUvRotation(spriteMaterial);
 
     // Handle window resize
     window.addEventListener('resize', onWindowResize3D, false);
@@ -320,23 +367,17 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     const bevel = CUBE_SIZE * 0.25;  // Bevel size for rounding
     const uvScale = 0.1;  // Scale factor for UV tiling
 
-    // Random rotation angle for this sprite's normal map (to reduce tiling repetition)
-    const uvRotation = Math.random() * Math.PI * 2;
-    const uvCos = Math.cos(uvRotation);
-    const uvSin = Math.sin(uvRotation);
-
     let vertexOffset = 0;
 
-    // Helper to add a vertex with UV based on position (rotated by random angle)
+    // Helper to add a vertex with UV based on position
     function addVertex(x, y, z, nx, ny, nz, color) {
         positions.push(x, y, z);
         normals.push(nx, ny, nz);
         vertexColors.push(color.r, color.g, color.b);
         // UV coordinates: use x+y for u, z+y for v (so vertical faces get texture too)
-        // Apply random rotation to reduce visible tiling
         const u = (x + y) * uvScale;
         const v = (z + y) * uvScale;
-        uvs.push(u * uvCos - v * uvSin, u * uvSin + v * uvCos);
+        uvs.push(u, v);
     }
 
     // Helper to add a triangle
@@ -951,6 +992,7 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
                     transparent: true,
                     side: THREE.DoubleSide,
                 });
+                addInstancedUvRotation(spriteGlassMaterials[spriteIndex]);
             }
             material = spriteGlassMaterials[spriteIndex];
         }
@@ -958,6 +1000,10 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.count = 0;
+        // Add per-instance UV rotation attribute
+        const uvRotations = new Float32Array(maxInstances);
+        mesh.geometry.setAttribute('instanceUvRotation',
+            new THREE.InstancedBufferAttribute(uvRotations, 1));
         instancedMeshes[spriteIndex] = mesh;
         instanceCounts[spriteIndex] = 0;
         levelGroup.add(mesh);
@@ -997,6 +1043,11 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     }
 
     mesh.setMatrixAt(instanceIndex, matrix);
+
+    // Set instance UV rotation based on position. Basically random, but stable.
+    const uvRotAttr = mesh.geometry.getAttribute('instanceUvRotation');
+    uvRotAttr.setX(instanceIndex, (baseX + baseZ * Math.E) * 1000);
+    uvRotAttr.needsUpdate = true;
 }
 
 /**
