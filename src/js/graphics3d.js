@@ -1168,6 +1168,7 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     if (!geometry) return;
 
     const sprite = objectSprites[spriteIndex];
+    const obj = state.objects[state.idDict[spriteIndex]];
 
     // Calculate cell size
     const cellSizeX = state.sprite_size * CUBE_SIZE;
@@ -1177,8 +1178,9 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     const totalWidth = visibleWidth * cellSizeX;
     const totalHeight = visibleHeight * cellSizeZ;
 
-    const baseX = gridX * cellSizeX - totalWidth / 2;
-    const baseZ = gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length);
+    const spriteOffset = obj.spriteoffset || { x: 0, y: 0 };
+    const baseX = gridX * cellSizeX - totalWidth / 2 + spriteOffset.x * CUBE_SIZE;
+    const baseZ = gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length) + spriteOffset.y * CUBE_SIZE;
     const baseY = layer * SPRITE_HEIGHT * CUBE_SIZE * state.sprite_size;
 
     // Get or create the InstancedMesh for this sprite
@@ -1234,9 +1236,9 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     const matrix = new THREE.Matrix4();
 
     if (animFrom) {
-        // Start at animation origin
-        const startBaseX = animFrom.gridX * cellSizeX - totalWidth / 2;
-        const startBaseZ = animFrom.gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length);
+        // Start at animation origin (with same spriteoffset as end position)
+        const startBaseX = animFrom.gridX * cellSizeX - totalWidth / 2 + spriteOffset.x * CUBE_SIZE;
+        const startBaseZ = animFrom.gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length) + spriteOffset.y * CUBE_SIZE;
         matrix.setPosition(startBaseX, baseY, startBaseZ);
 
         // Track for animation
