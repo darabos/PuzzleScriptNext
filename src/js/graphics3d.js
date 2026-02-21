@@ -797,6 +797,7 @@ function buildObjectPositionMap(objects, width, height) {
 
 /**
  * Detect movements by comparing previous and current level states.
+ * Uses maximum bipartite matching to optimally pair old positions with new positions.
  * Returns array of: { objectIndex, fromPosIndex, toPosIndex }
  */
 function detectMovements() {
@@ -815,106 +816,92 @@ function detectMovements() {
 
     const movements = [];
 
-    // For each object type, match old positions to new positions using constraint propagation.
-    // This handles lines of objects moving together correctly by considering adjacency.
+    // For each object type, find maximum bipartite matching between old and new positions.
+    // Old positions form the left partition, new positions form the right partition.
+    // Edges connect positions that are the same cell or side-by-side neighbors.
     for (const objectIndex in newMap) {
         const oldPositions = oldMap[objectIndex] || [];
         const newPositions = newMap[objectIndex];
 
         if (oldPositions.length === 0) continue;  // Newly spawned objects
 
-        // Convert new positions to a Set for fast lookup
+        // Build index mappings for the bipartite graph
+        const newPosToIdx = new Map();
+        newPositions.forEach((pos, idx) => newPosToIdx.set(pos, idx));
         const newPosSet = new Set(newPositions);
 
-        // For each old position, compute possible new positions (stay, or move 1 step in any direction)
-        // Map: oldPos -> [possible newPos values]
-        const possibilities = {};
-        for (const oldPos of oldPositions) {
+        const width = curLevel.width;
+        const height = curLevel.height;
+
+        // Build adjacency list: adj[oldIdx] = [newIdx, ...] for reachable new positions
+        const adj = oldPositions.map(oldPos => {
             const oldX = (oldPos / previousLevelState.height) | 0;
             const oldY = oldPos % previousLevelState.height;
 
-            const candidates = [];
-            // Check stay in place and 4 adjacent cells
+            const neighbors = [];
+            // Check same cell and 4 adjacent cells
             const offsets = [
-                [0, 0],   // stay
+                [0, 0],   // same cell
                 [-1, 0],  // left
                 [1, 0],   // right
                 [0, -1],  // up
                 [0, 1],   // down
             ];
+
             for (const [dx, dy] of offsets) {
                 const newX = oldX + dx;
                 const newY = oldY + dy;
-                if (newX >= 0 && newX < curLevel.width && newY >= 0 && newY < curLevel.height) {
-                    const newPos = newY + newX * curLevel.height;
+                if (newX >= 0 && newX < width && newY >= 0 && newY < height) {
+                    const newPos = newY + newX * height;
                     if (newPosSet.has(newPos)) {
-                        candidates.push(newPos);
+                        neighbors.push(newPosToIdx.get(newPos));
                     }
                 }
             }
-            possibilities[oldPos] = candidates;
-        }
+            return neighbors;
+        });
 
-        // Iteratively assign old positions to new positions
-        const assignedNew = new Set();  // New positions already assigned
-        const solution = {};  // oldPos -> newPos
+        // Kuhn's algorithm (Hungarian algorithm) for maximum bipartite matching.
+        // matchNew[newIdx] = oldIdx that is matched to it, or -1 if unmatched.
+        const matchNew = new Array(newPositions.length).fill(-1);
 
-        // Keep assigning until all old positions are processed
-        const unassigned = new Set(oldPositions);
-        let toDelete = oldPositions.length - newPositions.length;
+        // Try to find an augmenting path starting from oldIdx using DFS.
+        function tryAugment(oldIdx, visited) {
+            for (const newIdx of adj[oldIdx]) {
+                if (visited[newIdx]) continue;
+                visited[newIdx] = true;
 
-        while (unassigned.size > 0) {
-            // Find the old position with the fewest remaining possibilities
-            let bestOldPos = null;
-            let bestCount = Infinity;
-
-            for (const oldPos of unassigned) {
-                // Filter out already-assigned new positions
-                const available = possibilities[oldPos].filter(p => !assignedNew.has(p));
-                possibilities[oldPos] = available;  // Update in place
-
-                if (available.length < bestCount) {
-                    bestCount = available.length;
-                    bestOldPos = oldPos;
+                // If newIdx is unmatched, or we can find an alternative augmenting path
+                // for its current match, then match oldIdx to newIdx.
+                if (matchNew[newIdx] === -1 || tryAugment(matchNew[newIdx], visited)) {
+                    matchNew[newIdx] = oldIdx;
+                    return true;
                 }
             }
-
-            if (bestOldPos === null) break;  // Should not happen
-
-            unassigned.delete(bestOldPos);
-            const ps = possibilities[bestOldPos];
-
-            // If there is nowhere to move or we have to delete some objects and this one can't stay in place, then remove it.
-            if (bestCount === 0 || (toDelete > 0 && !ps.includes(bestOldPos))) {
-                toDelete--;
-                continue;
-            }
-
-            // Choose one of the possibilities.
-            let chosenNew = ps[0];
-            for (const pos of ps) {
-                // Prefer to stay in place, or move to a previously empty cell.
-                if (pos === bestOldPos || !possibilities[pos]) {
-                    chosenNew = pos;
-                    break;
-                }
-            }
-            solution[bestOldPos] = chosenNew;
-            assignedNew.add(chosenNew);
+            return false;
         }
 
-        // Generate movements from the solution
-        for (const oldPosStr in solution) {
-            const oldPos = parseInt(oldPosStr);
-            const newPos = solution[oldPosStr];
+        // Find maximum matching by trying to augment from each old position
+        for (let oldIdx = 0; oldIdx < oldPositions.length; oldIdx++) {
+            const visited = new Array(newPositions.length).fill(false);
+            tryAugment(oldIdx, visited);
+        }
 
-            if (oldPos === newPos) continue;  // Object stayed in place
+        // Extract movements from the matching
+        for (let newIdx = 0; newIdx < newPositions.length; newIdx++) {
+            const oldIdx = matchNew[newIdx];
+            if (oldIdx !== -1) {
+                const oldPos = oldPositions[oldIdx];
+                const newPos = newPositions[newIdx];
 
-            movements.push({
-                objectIndex: parseInt(objectIndex),
-                fromPosIndex: oldPos,
-                toPosIndex: newPos
-            });
+                if (oldPos !== newPos) {  // Object moved
+                    movements.push({
+                        objectIndex: parseInt(objectIndex),
+                        fromPosIndex: oldPos,
+                        toPosIndex: newPos
+                    });
+                }
+            }
         }
     }
 
