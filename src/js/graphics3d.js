@@ -16,7 +16,7 @@ let groundPlane = null;  // Ground plane to receive shadows
 
 // Sprite geometry caching - merged geometry per sprite type
 let spriteGeometries = {};  // spriteIndex -> THREE.BufferGeometry (merged cubes with vertex colors)
-let spriteMinAlpha = {};    // spriteIndex -> minimum alpha value (1.0 = fully opaque)
+let spriteTransmission = {};    // spriteIndex -> minimum alpha value (1.0 = fully opaque)
 let spriteGlassMaterials = {};  // spriteIndex -> MeshPhysicalMaterial (per-sprite glass with custom transmission)
 let spriteMaterial = null;  // Shared material using vertex colors
 let clayNormalMap = null;   // Normal map texture for clay look
@@ -277,10 +277,10 @@ function updateCameraPosition() {
 
 /**
  * Parse a color string, handling #RRGGBBAA format with alpha.
- * Returns { color: THREE.Color, alpha: number (0-1) }
+ * Returns { red, green, blue, alpha, transmission }
  */
 function parseColorWithAlpha(colorStr) {
-    if (!colorStr) return { color: new THREE.Color(0, 0, 0), alpha: 0 };
+    if (!colorStr) return { red: 0, green: 0, blue: 0, alpha: 0, transmission: 0 };
     const str = colorStr.toLowerCase().trim();
 
     // Check for 8-character hex with alpha (#RRGGBBAA)
@@ -289,14 +289,26 @@ function parseColorWithAlpha(colorStr) {
         const g = parseInt(str.slice(3, 5), 16) / 255;
         const b = parseInt(str.slice(5, 7), 16) / 255;
         const a = parseInt(str.slice(7, 9), 16) / 255;
-        return { color: new THREE.Color(r, g, b), alpha: a };
+        const transmission = 1-a;
+        return { red: r, green: g, blue: b, alpha: a, transmission };
+    }
+
+    // Check for 4-character hex with alpha (#RGBA)
+    if (str.match(/^#[0-9a-f]{4}$/)) {
+        const r = parseInt(str[1] + str[1], 16) / 255;
+        const g = parseInt(str[2] + str[2], 16) / 255;
+        const b = parseInt(str[3] + str[3], 16) / 255;
+        const a = parseInt(str[4] + str[4], 16) / 255;
+        const transmission = 1-a;
+        return { red: r, green: g, blue: b, alpha: a, transmission };
     }
 
     // Standard color parsing (no alpha or full opacity)
     try {
-        return { color: new THREE.Color(str), alpha: 1.0 };
+        const color = new THREE.Color(str);
+        return { red: color.r, green: color.g, blue: color.b, alpha: 1.0, transmission: 0 };
     } catch (e) {
-        return { color: new THREE.Color(0, 0, 0), alpha: 0 };
+        return { red: 0, green: 0, blue: 0, alpha: 0, transmission: 0 };
     }
 }
 
@@ -308,7 +320,9 @@ function isPixelFilled(spriteData, colors, px, py, width, height) {
     const colorIndex = spriteData[py][px];
     if (colorIndex < 0) return false;
     const color = colors[colorIndex];
-    return color && color !== 'transparent' && color !== '#00000000';
+    if (!color || color === 'transparent') return false;
+    const parsed = parseColorWithAlpha(color);
+    return parsed.alpha > 0;
 }
 
 /**
@@ -344,16 +358,16 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     if (cubeCount === 0) return null;
 
     // Find minimum alpha value across all colors in the sprite
-    let minAlpha = 1.0;
+    let transmission = 0.0;
     for (const c of colors) {
-        if (c && c !== 'transparent' && c !== '#00000000') {
+        if (c && c !== 'transparent') {
             const parsed = parseColorWithAlpha(c);
-            if (parsed.alpha < minAlpha) {
-                minAlpha = parsed.alpha;
+            if (parsed.alpha < 1 && parsed.transmission > transmission) {
+                transmission = parsed.transmission;
             }
         }
     }
-    spriteMinAlpha[spriteIndex] = minAlpha;
+    spriteTransmission[spriteIndex] = transmission;
 
     // Create merged geometry
     const positions = [];
@@ -373,7 +387,12 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     function addVertex(x, y, z, nx, ny, nz, color) {
         positions.push(x, y, z);
         normals.push(nx, ny, nz);
-        vertexColors.push(color.r, color.g, color.b);
+        if (transmission === 0) {
+            vertexColors.push(color.red, color.green, color.blue);
+        } else {
+            const scale = c => c + (1 - c) * color.transmission;
+            vertexColors.push(scale(color.red), scale(color.green), scale(color.blue));
+        }
         // UV coordinates: use x+y for u, z+y for v (so vertical faces get texture too)
         const u = (x + y) * uvScale;
         const v = (z + y) * uvScale;
@@ -397,8 +416,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             const colorIndex = spriteData[py][px];
             const color = colors[colorIndex];
-            const parsed = parseColorWithAlpha(color);
-            const threeColor = parsed.color;
+            const parsedColor = parseColorWithAlpha(color);
 
             // Offset for this cube within the sprite
             const offsetX = px * CUBE_SIZE;
@@ -572,7 +590,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             // ===== INNER TOP FACE =====
             const topStartIdx = positions.length / 3;
             for (const v of innerVerts) {
-                addVertex(v[0], innerTopY, v[1], 0, 1, 0, threeColor);
+                addVertex(v[0], innerTopY, v[1], 0, 1, 0, parsedColor);
             }
             for (let i = 1; i < innerVerts.length - 1; i++) {
                 indices.push(topStartIdx, topStartIdx + i + 1, topStartIdx + i);
@@ -604,10 +622,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                 const nz = sideNz / bevelLen;
 
                 const bevelStartIdx = positions.length / 3;
-                addVertex(inner1[0], innerTopY, inner1[1], nx, ny, nz, threeColor);
-                addVertex(inner2[0], innerTopY, inner2[1], nx, ny, nz, threeColor);
-                addVertex(outer2[0], outerTopY, outer2[1], nx, ny, nz, threeColor);
-                addVertex(outer1[0], outerTopY, outer1[1], nx, ny, nz, threeColor);
+                addVertex(inner1[0], innerTopY, inner1[1], nx, ny, nz, parsedColor);
+                addVertex(inner2[0], innerTopY, inner2[1], nx, ny, nz, parsedColor);
+                addVertex(outer2[0], outerTopY, outer2[1], nx, ny, nz, parsedColor);
+                addVertex(outer1[0], outerTopY, outer1[1], nx, ny, nz, parsedColor);
                 indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
                 indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
             }
@@ -629,10 +647,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                 const nz = -dx / len;
 
                 const sideStartIdx = positions.length / 3;
-                addVertex(t1[0], outerTopY, t1[1], nx, 0, nz, threeColor);
-                addVertex(t2[0], outerTopY, t2[1], nx, 0, nz, threeColor);
-                addVertex(t2[0], outerBotY, t2[1], nx, 0, nz, threeColor);
-                addVertex(t1[0], outerBotY, t1[1], nx, 0, nz, threeColor);
+                addVertex(t1[0], outerTopY, t1[1], nx, 0, nz, parsedColor);
+                addVertex(t2[0], outerTopY, t2[1], nx, 0, nz, parsedColor);
+                addVertex(t2[0], outerBotY, t2[1], nx, 0, nz, parsedColor);
+                addVertex(t1[0], outerBotY, t1[1], nx, 0, nz, parsedColor);
                 indices.push(sideStartIdx, sideStartIdx + 1, sideStartIdx + 2);
                 indices.push(sideStartIdx, sideStartIdx + 2, sideStartIdx + 3);
             }
@@ -661,10 +679,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                 const nz = sideNz / bevelLen;
 
                 const bevelStartIdx = positions.length / 3;
-                addVertex(outer1[0], outerBotY, outer1[1], nx, ny, nz, threeColor);
-                addVertex(outer2[0], outerBotY, outer2[1], nx, ny, nz, threeColor);
-                addVertex(inner2[0], innerBotY, inner2[1], nx, ny, nz, threeColor);
-                addVertex(inner1[0], innerBotY, inner1[1], nx, ny, nz, threeColor);
+                addVertex(outer1[0], outerBotY, outer1[1], nx, ny, nz, parsedColor);
+                addVertex(outer2[0], outerBotY, outer2[1], nx, ny, nz, parsedColor);
+                addVertex(inner2[0], innerBotY, inner2[1], nx, ny, nz, parsedColor);
+                addVertex(inner1[0], innerBotY, inner1[1], nx, ny, nz, parsedColor);
                 indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
                 indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
             }
@@ -672,7 +690,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             // ===== INNER BOTTOM FACE =====
             const botStartIdx = positions.length / 3;
             for (const v of innerVerts) {
-                addVertex(v[0], innerBotY, v[1], 0, -1, 0, threeColor);
+                addVertex(v[0], innerBotY, v[1], 0, -1, 0, parsedColor);
             }
             for (let i = 1; i < innerVerts.length - 1; i++) {
                 indices.push(botStartIdx, botStartIdx + i, botStartIdx + i + 1);
@@ -728,7 +746,7 @@ function clearScene3D() {
     animatedMeshes = [];
     // Clear sprite geometries when switching games (sprites may have changed)
     spriteGeometries = {};
-    spriteMinAlpha = {};
+    spriteTransmission = {};
     // Dispose and clear per-sprite glass materials
     for (const key in spriteGlassMaterials) {
         spriteGlassMaterials[key].dispose();
@@ -976,9 +994,9 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
         // Create new InstancedMesh with generous max count
         // Use glass material with transmission based on min alpha if sprite has transparency
         const maxInstances = 1000;
-        const minAlpha = spriteMinAlpha[spriteIndex];
+        const transmission = spriteTransmission[spriteIndex];
         let material = spriteMaterial;
-        if (minAlpha < 1.0) {
+        if (transmission > 0) {
             // Create per-sprite glass material with transmission based on alpha
             // Lower alpha = higher transmission (more transparent)
             if (!spriteGlassMaterials[spriteIndex]) {
@@ -986,8 +1004,8 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
                     vertexColors: true,
                     roughness: 0.3,
                     metalness: 0.0,
-                    transmission: 1.0 - minAlpha,
-                    thickness: 2,
+                    transmission: transmission,
+                    thickness: 10 * SPRITE_HEIGHT,
                     ior: 1.5,
                     transparent: true,
                     side: THREE.DoubleSide,
@@ -1144,12 +1162,12 @@ function redraw3D() {
         const shadowSize = Math.max(visibleWidth, visibleHeight) * state.sprite_size * 0.7;
 
         // SpotLight uses perspective shadow camera - update far plane and distance
-        keyLight.shadow.camera.near = shadowSize * 0.5;
-        keyLight.shadow.camera.far = shadowSize * 3;
+        keyLight.shadow.camera.near = shadowSize * 2.5 * SPRITE_HEIGHT;
+        keyLight.shadow.camera.far = shadowSize * 15 * SPRITE_HEIGHT;
         keyLight.shadow.camera.updateProjectionMatrix();
 
         // Position key light relative to level center (front-right-above)
-        keyLight.position.set(shadowSize * 0.8, shadowSize * 0.6, shadowSize * 0.6);
+        keyLight.position.set(shadowSize * 0.8, shadowSize * 3 * SPRITE_HEIGHT, shadowSize * 0.6);
         keyLight.target.position.set(0, 0, 0);
         keyLight.power = 10 * Math.pow(shadowSize, 0.5);  // Scale power with shadow area for consistent brightness
 
