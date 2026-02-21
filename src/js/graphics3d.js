@@ -756,55 +756,106 @@ function detectMovements() {
 
     const movements = [];
 
-    // For each object type, find what moved
+    // For each object type, match old positions to new positions using constraint propagation.
+    // This handles lines of objects moving together correctly by considering adjacency.
     for (const objectIndex in newMap) {
         const oldPositions = oldMap[objectIndex] || [];
         const newPositions = newMap[objectIndex];
 
-        // First pass: mark all positions that exist in both old and new as "used"
-        // These objects stayed in place and don't need animation
-        const usedOld = new Set();
-        const usedNew = new Set();
+        if (oldPositions.length === 0) continue;  // Newly spawned objects
 
-        for (const newPos of newPositions) {
-            if (oldPositions.includes(newPos)) {
-                // Object exists in same position - it didn't move
-                usedOld.add(newPos);
-                usedNew.add(newPos);
+        // Convert new positions to a Set for fast lookup
+        const newPosSet = new Set(newPositions);
+
+        // For each old position, compute possible new positions (stay, or move 1 step in any direction)
+        // Map: oldPos -> [possible newPos values]
+        const possibilities = {};
+        for (const oldPos of oldPositions) {
+            const oldX = (oldPos / previousLevelState.height) | 0;
+            const oldY = oldPos % previousLevelState.height;
+
+            const candidates = [];
+            // Check stay in place and 4 adjacent cells
+            const offsets = [
+                [0, 0],   // stay
+                [-1, 0],  // left
+                [1, 0],   // right
+                [0, -1],  // up
+                [0, 1],   // down
+            ];
+            for (const [dx, dy] of offsets) {
+                const newX = oldX + dx;
+                const newY = oldY + dy;
+                if (newX >= 0 && newX < curLevel.width && newY >= 0 && newY < curLevel.height) {
+                    const newPos = newY + newX * curLevel.height;
+                    if (newPosSet.has(newPos)) {
+                        candidates.push(newPos);
+                    }
+                }
             }
+            possibilities[oldPos] = candidates;
         }
 
-        // Second pass: match remaining positions by proximity
-        for (const newPos of newPositions) {
-            if (usedNew.has(newPos)) continue;  // Already matched (stayed in place)
+        // Iteratively assign old positions to new positions
+        const assignedNew = new Set();  // New positions already assigned
+        const solution = {};  // oldPos -> newPos
 
-            const newX = (newPos / curLevel.height) | 0;
-            const newY = newPos % curLevel.height;
+        // Keep assigning until all old positions are processed
+        const unassigned = new Set(oldPositions);
+        let toDelete = oldPositions.length - newPositions.length;
 
+        while (unassigned.size > 0) {
+            // Find the old position with the fewest remaining possibilities
             let bestOldPos = null;
-            let bestDist = Infinity;
+            let bestCount = Infinity;
 
-            for (const oldPos of oldPositions) {
-                if (usedOld.has(oldPos)) continue;
+            for (const oldPos of unassigned) {
+                // Filter out already-assigned new positions
+                const available = possibilities[oldPos].filter(p => !assignedNew.has(p));
+                possibilities[oldPos] = available;  // Update in place
 
-                const oldX = (oldPos / previousLevelState.height) | 0;
-                const oldY = oldPos % previousLevelState.height;
-
-                const dist = Math.abs(newX - oldX) + Math.abs(newY - oldY);
-                if (dist < bestDist && dist > 0 && dist <= 2) {  // Only animate small moves
-                    bestDist = dist;
+                if (available.length < bestCount) {
+                    bestCount = available.length;
                     bestOldPos = oldPos;
                 }
             }
 
-            if (bestOldPos !== null) {
-                usedOld.add(bestOldPos);
-                movements.push({
-                    objectIndex: parseInt(objectIndex),
-                    fromPosIndex: bestOldPos,
-                    toPosIndex: newPos
-                });
+            if (bestOldPos === null) break;  // Should not happen
+
+            unassigned.delete(bestOldPos);
+            const ps = possibilities[bestOldPos];
+
+            // If there is nowhere to move or we have to delete some objects and this one can't stay in place, then remove it.
+            if (bestCount === 0 || (toDelete > 0 && !ps.includes(bestOldPos))) {
+                toDelete--;
+                continue;
             }
+
+            // Choose one of the possibilities.
+            let chosenNew = ps[0];
+            for (const pos of ps) {
+                // Prefer to stay in place, or move to a previously empty cell.
+                if (pos === bestOldPos || !possibilities[pos]) {
+                    chosenNew = pos;
+                    break;
+                }
+            }
+            solution[bestOldPos] = chosenNew;
+            assignedNew.add(chosenNew);
+        }
+
+        // Generate movements from the solution
+        for (const oldPosStr in solution) {
+            const oldPos = parseInt(oldPosStr);
+            const newPos = solution[oldPosStr];
+
+            if (oldPos === newPos) continue;  // Object stayed in place
+
+            movements.push({
+                objectIndex: parseInt(objectIndex),
+                fromPosIndex: oldPos,
+                toPosIndex: newPos
+            });
         }
     }
 
