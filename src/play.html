@@ -294,7 +294,14 @@ function strip_http(url) {
 }
 
 function getData() { 
-	let id = getParameterByName("p").replace(/[\\\/]/,"");
+    const p = getParameterByName("p");
+    if (p.includes("itch.io")) {
+        fetchPuzzleScriptFromItch(p)
+            .then(source => prepareForPlay(`itch=${encodeURIComponent(p)}`, source))
+            .catch(error => displayError(error.message));
+        return;
+    }
+	let id = p.replace(/[\\\/]/,"");
 	if (id && id.length > 0) {
         tryLoadGist(id, `https://api.github.com/gists/${id}`);
     } else {
@@ -306,6 +313,108 @@ function getData() {
 		    return;
         }
 	}
+}
+
+/**
+ * Fetches PuzzleScript source code from an itch.io game page.
+ *
+ * @param {string} itchUrl - The itch.io page URL (e.g., "https://toombler.itch.io/a-is-for-astronaut")
+ * @returns {Promise<string>} - The PuzzleScript source code
+ */
+async function fetchPuzzleScriptFromItch(itchUrl) {
+    // Work around CORS.
+    const corsProxy = url => `https://whateverorigin.org/get?url=${encodeURIComponent(url)}`;
+
+    // Step 1: Fetch the itch.io page
+    const itchResponse = await fetch(corsProxy(itchUrl));
+    if (!itchResponse.ok) {
+        throw new Error(`Failed to fetch itch.io page: ${itchResponse.status} ${itchResponse.statusText}`);
+    }
+    const itchHtml = (await itchResponse.json()).contents;
+
+    // Step 2: Find the game iframe and extract its src
+    let iframeSrc;
+
+    // Try direct iframe first
+    const iframeMatch = itchHtml.match(/<iframe[^>]*id=["']game_drop["'][^>]*src=["']([^"']+)["'][^>]*>/i)
+        || itchHtml.match(/<iframe[^>]*src=["']([^"']+)["'][^>]*id=["']game_drop["'][^>]*>/i);
+
+    if (iframeMatch) {
+        iframeSrc = iframeMatch[1];
+    } else {
+        // Try data-iframe attribute (contains HTML-entity-encoded iframe)
+        const dataIframeMatch = itchHtml.match(/data-iframe="([^"]+)"/i);
+        if (dataIframeMatch) {
+            // Decode HTML entities
+            const decodedIframe = dataIframeMatch[1]
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"')
+                .replace(/&amp;/g, '&');
+            // Extract src from decoded iframe
+            const srcMatch = decodedIframe.match(/src="([^"]+)"/i);
+            if (srcMatch) {
+                iframeSrc = srcMatch[1];
+            }
+        }
+    }
+
+    if (!iframeSrc) {
+        throw new Error('Could not find game iframe in itch.io page');
+    }
+
+    // Step 3: Fetch the iframe's HTML content
+    const iframeResponse = await fetch(corsProxy(iframeSrc));
+    if (!iframeResponse.ok) {
+        throw new Error(`Failed to fetch iframe content: ${iframeResponse.status} ${iframeResponse.statusText}`);
+    }
+    const iframeHtml = (await iframeResponse.json()).contents;
+
+    // Step 4: Find the PuzzleScript source
+    let escapedSource;
+
+    // Format 1: compile(-1, "...")
+    const compileMatch = iframeHtml.match(/compile\s*\(\s*-?\d+\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)/);
+    if (compileMatch) {
+        escapedSource = compileMatch[1];
+    } else {
+        // Format 2: const sourceCode = "..."; compile(["restart"], sourceCode);
+        const sourceCodeMatch = iframeHtml.match(/(?:const|var)\s+sourceCode\s*=\s*"((?:[^"\\]|\\.)*)"\s*;/);
+        if (sourceCodeMatch) {
+            escapedSource = sourceCodeMatch[1];
+        }
+    }
+
+    if (!escapedSource) {
+        throw new Error('Could not find PuzzleScript source in compile() call');
+    }
+
+    // Step 5: Unescape the string (it contains \n for newlines, etc.)
+    const puzzleScriptSource = unescapeJSString(escapedSource);
+
+    return puzzleScriptSource;
+}
+
+/**
+ * Unescapes a JavaScript string literal content.
+ * Handles common escape sequences like \n, \t, \\, \", etc.
+ *
+ * @param {string} str - The escaped string content
+ * @returns {string} - The unescaped string
+ */
+function unescapeJSString(str) {
+    return str.replace(/\\(.)/g, (match, char) => {
+        switch (char) {
+            case 'n': return '\n';
+            case 'r': return '\r';
+            case 't': return '\t';
+            case '\\': return '\\';
+            case '"': return '"';
+            case "'": return "'";
+            case '0': return '\0';
+            default: return char;
+        }
+    });
 }
 
 function tryLoadGist(id, githubURL) {
