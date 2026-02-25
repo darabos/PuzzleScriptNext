@@ -297,7 +297,7 @@ function getData() {
     const p = getParameterByName("p");
     if (p.includes("itch.io")) {
         fetchPuzzleScriptFromItch(p)
-            .then(source => prepareForPlay(`itch=${encodeURIComponent(p)}`, source))
+            .then(source => prepareForPlay(`hack=${encodeURIComponent(p)}`, source))
             .catch(error => displayError(error.message));
         return;
     }
