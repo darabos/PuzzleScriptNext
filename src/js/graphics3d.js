@@ -51,6 +51,12 @@ let cameraDistance = CAMERA_DISTANCE;
 let cameraAngleX = 1.2;
 let cameraAngleY = 0.0;
 
+// Mouse orbit controls state
+let isMouseDragging = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+const ORBIT_SENSITIVITY = 0.01;
+
 /**
  * Add per-instance UV rotation to a material using onBeforeCompile.
  * This allows each instance of an InstancedMesh to have its own UV rotation,
@@ -156,6 +162,12 @@ function init3DRenderer() {
             lastDownTarget = renderer3d.domElement;
         }
     });
+
+    // Mouse orbital controls
+    renderer3d.domElement.addEventListener('mousedown', onMouseDown3D, false);
+    renderer3d.domElement.addEventListener('mousemove', onMouseMove3D, false);
+    renderer3d.domElement.addEventListener('mouseup', onMouseUp3D, false);
+    renderer3d.domElement.addEventListener('mouseleave', onMouseUp3D, false);
 
     // Create the scene
     scene3d = new THREE.Scene();
@@ -265,12 +277,55 @@ function updateCameraPosition() {
     if (!camera3d || !scene3d) return;
 
     // Calculate camera position in spherical coordinates
-    const x = cameraDistance * Math.sin(cameraAngleY) * Math.cos(cameraAngleX);
-    const y = cameraDistance * Math.sin(cameraAngleX) + 10;
-    const z = cameraDistance * Math.cos(cameraAngleY) * Math.cos(cameraAngleX);
+    const x = cameraDistance * Math.sin(cameraAngleY);
+    const y = cameraDistance * Math.sin(cameraAngleX) * Math.cos(cameraAngleY);
+    const z = cameraDistance * Math.cos(cameraAngleX);
 
     camera3d.position.set(x, y, z);
+    camera3d.up.set(0, 0, -1);
     camera3d.lookAt(0, 0, 0);
+}
+
+/**
+ * Handle mouse down for orbital camera controls
+ */
+function onMouseDown3D(e) {
+    // Only respond to left mouse button
+    if (e.button !== 0) return;
+
+    isMouseDragging = true;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+}
+
+/**
+ * Handle mouse move for orbital camera controls
+ */
+function onMouseMove3D(e) {
+    if (!isMouseDragging) return;
+
+    const deltaX = e.clientX - lastMouseX;
+    const deltaY = e.clientY - lastMouseY;
+
+    // Update camera angles
+    cameraAngleY -= deltaX * ORBIT_SENSITIVITY;
+    cameraAngleX += deltaY * ORBIT_SENSITIVITY;
+
+    // Clamp vertical angle to prevent flipping
+    const MIN_ANGLE = 0.1;
+    const MAX_ANGLE = Math.PI - 0.1;
+    cameraAngleX = Math.max(MIN_ANGLE, Math.min(MAX_ANGLE, cameraAngleX));
+
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    redraw3D();
+}
+
+/**
+ * Handle mouse up for orbital camera controls
+ */
+function onMouseUp3D(e) {
+    isMouseDragging = false;
 }
 
 /**
