@@ -245,10 +245,12 @@ function init3DRenderer() {
     );
 
     // Create shared material that uses vertex colors (normal map added when loaded)
-    spriteMaterial = new THREE.MeshStandardMaterial({
+    spriteMaterial = new THREE.MeshPhysicalMaterial({
         vertexColors: true,
-        roughness: 0.7,
-        metalness: 0.0
+        roughness: 0.6,
+        metalness: 0.0,
+        clearcoat: 0.9,
+        clearcoatRoughness: 0.8,
     });
     addInstancedUvRotation(spriteMaterial);
 
@@ -651,7 +653,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             // ===== TOP BEVEL STRIP =====
             // Connect inner perimeter (at innerTopY) to outer perimeter (at outerTopY)
-            // Only generate bevels for exposed edges
+            // Uses smooth normals: inner edge gets top normal (0,1,0), outer edge gets side normal
             const n = innerVerts.length;
             for (let i = 0; i < n; i++) {
                 if (!outerEdgeExposed[i]) continue;  // Skip internal edges
@@ -662,23 +664,20 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                 const outer1 = outerVerts[i];
                 const outer2 = outerVerts[i2];
 
-                // Calculate normal for this bevel face (pointing outward and upward)
+                // Calculate side normal (pointing outward horizontally)
                 const dx = outer2[0] - outer1[0];
                 const dz = outer2[1] - outer1[1];
                 const len = Math.sqrt(dx * dx + dz * dz);
                 const sideNx = dz / len;
                 const sideNz = -dx / len;
-                // Bevel normal is tilted 45 degrees up
-                const bevelLen = Math.sqrt(2);
-                const nx = sideNx / bevelLen;
-                const ny = 1 / bevelLen;
-                const nz = sideNz / bevelLen;
 
                 const bevelStartIdx = positions.length / 3;
-                addVertex(inner1[0], innerTopY, inner1[1], nx, ny, nz, parsedColor);
-                addVertex(inner2[0], innerTopY, inner2[1], nx, ny, nz, parsedColor);
-                addVertex(outer2[0], outerTopY, outer2[1], nx, ny, nz, parsedColor);
-                addVertex(outer1[0], outerTopY, outer1[1], nx, ny, nz, parsedColor);
+                // Inner vertices: normal points up (blends from top face)
+                addVertex(inner1[0], innerTopY, inner1[1], 0, 1, 0, parsedColor);
+                addVertex(inner2[0], innerTopY, inner2[1], 0, 1, 0, parsedColor);
+                // Outer vertices: normal points sideways (blends to side face)
+                addVertex(outer2[0], outerTopY, outer2[1], sideNx, 0, sideNz, parsedColor);
+                addVertex(outer1[0], outerTopY, outer1[1], sideNx, 0, sideNz, parsedColor);
                 indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
                 indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
             }
@@ -710,7 +709,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
             // ===== BOTTOM BEVEL STRIP =====
             // Connect outer perimeter (at outerBotY) to inner perimeter (at innerBotY)
-            // Only generate bevels for exposed edges
+            // Uses smooth normals: outer edge gets side normal, inner edge gets bottom normal (0,-1,0)
             for (let i = 0; i < n; i++) {
                 if (!outerEdgeExposed[i]) continue;  // Skip internal edges
 
@@ -720,22 +719,20 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                 const inner1 = innerVerts[i];
                 const inner2 = innerVerts[i2];
 
+                // Calculate side normal (pointing outward horizontally)
                 const dx = outer2[0] - outer1[0];
                 const dz = outer2[1] - outer1[1];
                 const len = Math.sqrt(dx * dx + dz * dz);
                 const sideNx = dz / len;
                 const sideNz = -dx / len;
-                // Bevel normal is tilted 45 degrees down
-                const bevelLen = Math.sqrt(2);
-                const nx = sideNx / bevelLen;
-                const ny = -1 / bevelLen;
-                const nz = sideNz / bevelLen;
 
                 const bevelStartIdx = positions.length / 3;
-                addVertex(outer1[0], outerBotY, outer1[1], nx, ny, nz, parsedColor);
-                addVertex(outer2[0], outerBotY, outer2[1], nx, ny, nz, parsedColor);
-                addVertex(inner2[0], innerBotY, inner2[1], nx, ny, nz, parsedColor);
-                addVertex(inner1[0], innerBotY, inner1[1], nx, ny, nz, parsedColor);
+                // Outer vertices: normal points sideways (blends from side face)
+                addVertex(outer1[0], outerBotY, outer1[1], sideNx, 0, sideNz, parsedColor);
+                addVertex(outer2[0], outerBotY, outer2[1], sideNx, 0, sideNz, parsedColor);
+                // Inner vertices: normal points down (blends to bottom face)
+                addVertex(inner2[0], innerBotY, inner2[1], 0, -1, 0, parsedColor);
+                addVertex(inner1[0], innerBotY, inner1[1], 0, -1, 0, parsedColor);
                 indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
                 indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
             }
