@@ -18,6 +18,8 @@ let spriteTransmission = {};    // spriteIndex -> minimum alpha value (1.0 = ful
 let spriteGlassMaterials = {};  // spriteIndex -> MeshPhysicalMaterial (per-sprite glass with custom transmission)
 let spriteMaterial = null;  // Shared material using vertex colors
 let clayNormalMap = null;   // Normal map texture for clay look
+let woodTexture = null;   // Worn wood texture. Applied on top of vertex colors.
+let roughnessMap = null;  // Roughness map for worn wood look.
 
 // Instanced mesh system - one InstancedMesh per sprite type
 let instancedMeshes = {};   // spriteIndex -> THREE.InstancedMesh
@@ -69,36 +71,81 @@ function addInstancedUvRotation(material) {
             '#include <common>',
             `#include <common>
             attribute float instanceUvRotation;
-            varying float vUvRotation;`
+            attribute float instanceUvShift;
+            varying float vUvRotation;
+            varying float vUvShift;`
         );
         // Pass the rotation to fragment shader
         shader.vertexShader = shader.vertexShader.replace(
             '#include <uv_vertex>',
             `#include <uv_vertex>
-            vUvRotation = instanceUvRotation;`
+            vUvRotation = instanceUvRotation;
+            vUvShift = instanceUvShift;`
         );
         // Declare the varying in fragment shader
         shader.fragmentShader = shader.fragmentShader.replace(
             '#include <common>',
             `#include <common>
-            varying float vUvRotation;`
+            varying float vUvRotation;
+            varying float vUvShift;`
         );
-        // Rotate UVs before normal map lookup
+        // Rotate/shift textures, apply decal.
+        const uvScale = '0.5';
         shader.fragmentShader = shader.fragmentShader.replace(
             '#include <normal_fragment_maps>',
-            `// Rotate UVs for normal map sampling
+            `
             #ifdef USE_NORMALMAP
-            vec2 rotatedUv = vNormalMapUv;
-            float uvCos = cos(vUvRotation);
-            float uvSin = sin(vUvRotation);
-            rotatedUv = vec2(
-                rotatedUv.x * uvCos - rotatedUv.y * uvSin,
-                rotatedUv.x * uvSin + rotatedUv.y * uvCos
-            );
-            vec3 mapN = texture2D( normalMap, rotatedUv ).xyz * 2.0 - 1.0;
-            mapN.xy *= normalScale;
-            normal = normalize( tbn * mapN );
+            {
+                vec2 rotatedUv = vNormalMapUv * ${uvScale} + vec2(vUvShift, 0.);
+                float uvCos = cos(vUvRotation);
+                float uvSin = sin(vUvRotation);
+                rotatedUv = vec2(
+                    rotatedUv.x * uvCos - rotatedUv.y * uvSin,
+                    rotatedUv.x * uvSin + rotatedUv.y * uvCos
+                );
+                vec3 mapN = texture2D( normalMap, rotatedUv ).xyz * 2.0 - 1.0;
+                mapN.xy *= normalScale;
+                normal = normalize( tbn * mapN );
+            }
             #endif`
+        );
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <map_fragment>',
+            `
+            #ifdef USE_MAP
+            {
+                vec2 rotatedUv = vMapUv * ${uvScale} + vec2(vUvShift, 0.);
+                float uvCos = cos(vUvRotation);
+                float uvSin = sin(vUvRotation);
+                rotatedUv = vec2(
+                    rotatedUv.x * uvCos - rotatedUv.y * uvSin,
+                    rotatedUv.x * uvSin + rotatedUv.y * uvCos
+                );
+                vec4 texelColor = texture2D( map, rotatedUv );
+                diffuseColor.rgb = mix(diffuseColor.rgb, texelColor.rgb, texelColor.a*0.7);
+            }
+            #endif
+            `
+        );
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <roughnessmap_fragment>',
+            `
+            float roughnessFactor = roughness;
+
+            #ifdef USE_ROUGHNESSMAP
+            {
+                vec2 rotatedUv = vRoughnessMapUv * ${uvScale} + vec2(vUvShift, 0.);
+                float uvCos = cos(vUvRotation);
+                float uvSin = sin(vUvRotation);
+                rotatedUv = vec2(
+                    rotatedUv.x * uvCos - rotatedUv.y * uvSin,
+                    rotatedUv.x * uvSin + rotatedUv.y * uvCos
+                );
+                vec4 texelRoughness = texture2D( roughnessMap, rotatedUv );
+                roughnessFactor *= texelRoughness.g;
+            }
+            #endif
+            `
         );
     };
 }
@@ -188,7 +235,7 @@ function init3DRenderer() {
     // === THREE-POINT LIGHTING SYSTEM ===
 
     // Ambient light - very low, just to prevent pure black shadows
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.1);
     scene3d.add(ambientLight);
 
     // KEY LIGHT - Main light, warm color, casts shadows
@@ -218,14 +265,14 @@ function init3DRenderer() {
 
     // FILL LIGHT - Soft light, cool color, no shadows
     // Positioned front-left, lower than key light
-    fillLight = new THREE.DirectionalLight(0xddeeff, 1);  // Cool blue-white
+    fillLight = new THREE.DirectionalLight(0xddeeff, 1.6);  // Cool blue-white
     fillLight.castShadow = false;  // Fill light doesn't cast shadows
     scene3d.add(fillLight);
 
     // Load clay normal map texture (optional - works without it for standalone export)
     const textureLoader = new THREE.TextureLoader();
     const NORMAL_SCALE = 0.5;  // Adjust normal map strength for subtle effect
-    clayNormalMap = textureLoader.load('images/clay_normal.jpg',
+    clayNormalMap = textureLoader.load('images/wood_normal.jpg',
         function(texture) {
             texture.wrapS = THREE.RepeatWrapping;
             texture.wrapT = THREE.RepeatWrapping;
@@ -243,14 +290,42 @@ function init3DRenderer() {
             clayNormalMap = null;
         }
     );
+    woodTexture = textureLoader.load('images/painted-wood.webp',
+        function(texture) {
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            // Update material once texture is loaded
+            if (spriteMaterial) {
+                spriteMaterial.map = texture;
+                spriteMaterial.needsUpdate = true;
+            }
+        },
+        undefined,  // onProgress
+        function(error) {
+            woodTexture = null;
+        }
+    );
+    roughnessMap = textureLoader.load('images/painted-wood-roughness.jpg',
+        function(texture) {
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            // Update material once texture is loaded
+            if (spriteMaterial) {
+                spriteMaterial.roughnessMap = texture;
+                spriteMaterial.needsUpdate = true;
+            }
+        },
+        undefined,  // onProgress
+        function(error) {
+            roughnessMap = null;
+        }
+    );
 
     // Create shared material that uses vertex colors (normal map added when loaded)
     spriteMaterial = new THREE.MeshPhysicalMaterial({
         vertexColors: true,
-        roughness: 0.6,
+        roughness: 1.,
         metalness: 0.0,
-        clearcoat: 0.9,
-        clearcoatRoughness: 0.8,
     });
     addInstancedUvRotation(spriteMaterial);
 
@@ -1263,8 +1338,11 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.count = 0;
-        // Add per-instance UV rotation attribute
+        // Add per-instance UV shift and rotation attribute
+        const uvShifts = new Float32Array(maxInstances);
         const uvRotations = new Float32Array(maxInstances);
+        mesh.geometry.setAttribute('instanceUvShift',
+            new THREE.InstancedBufferAttribute(uvShifts, 1));
         mesh.geometry.setAttribute('instanceUvRotation',
             new THREE.InstancedBufferAttribute(uvRotations, 1));
         instancedMeshes[spriteIndex] = mesh;
@@ -1307,10 +1385,17 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
 
     mesh.setMatrixAt(instanceIndex, matrix);
 
-    // Set instance UV rotation based on position. Basically random, but stable.
+    // Set instance UV rotation and shift based on position. Basically random, but stable.
     const uvRotAttr = mesh.geometry.getAttribute('instanceUvRotation');
-    uvRotAttr.setX(instanceIndex, (baseX + baseZ * Math.E) * 1000);
+    let rnd = (Math.PI * 50 + baseX + baseZ * Math.E) * 1000 % 1;
+    // Bias toward 0, 90, 180, 270 degree rotations to reduce visible seams on sprites with hard edges
+    rnd = Math.atan((rnd - 0.5) * 50) / 2 + Math.PI / 4;
+    uvRotAttr.setX(instanceIndex, rnd);
     uvRotAttr.needsUpdate = true;
+
+    const uvShiftAttr = mesh.geometry.getAttribute('instanceUvShift');
+    uvShiftAttr.setX(instanceIndex, (baseZ * Math.PI + baseX * Math.E) * 10);
+    uvShiftAttr.needsUpdate = true;
 }
 
 /**
@@ -1414,7 +1499,7 @@ function redraw3D() {
         // Position key light relative to level center (front-right-above)
         keyLight.position.set(shadowSize * 0.8, shadowSize * 3 * SPRITE_HEIGHT, shadowSize * 0.6);
         keyLight.target.position.set(0, 0, 0);
-        keyLight.power = 10 * Math.pow(shadowSize, 0.5);  // Scale power with shadow area for consistent brightness
+        keyLight.power = 20 * Math.pow(shadowSize, 0.5);  // Scale power with shadow area for consistent brightness
 
         // Update fill light position (front-left)
         if (fillLight) {
