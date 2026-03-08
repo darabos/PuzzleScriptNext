@@ -245,6 +245,7 @@ function init3DRenderer() {
     keyLight.penumbra = 0.5;  // Soft edge falloff
     keyLight.decay = 0.5;  // Light decay with distance
     keyLight.castShadow = true;
+    keyLight.shadow.normalBias = 0.02;
 
     // Shadow settings for spot light
     keyLight.shadow.mapSize.width = 2048;
@@ -672,10 +673,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                 }
             } else if (cornerBackLeft) {
                 // Concave corner: notch diagonal is exposed
-                outerVerts.push([blX, blZ + bevel]);
-                outerEdgeExposed.push(true);  // Concave notch diagonal
-                outerVerts.push([blX + bevel, blZ]);
-                outerEdgeExposed.push(bevelBack);  // Back edge
+                outerVerts.push([blX, blZ]);
+                outerEdgeExposed.push(true);
+                outerVerts.push([blX, blZ]);
+                outerEdgeExposed.push(true);
             } else {
                 outerVerts.push([blX, blZ]);
                 outerEdgeExposed.push(bevelBack);  // Back edge
@@ -693,10 +694,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                 }
             } else if (cornerBackRight) {
                 // Concave corner: notch diagonal is exposed
-                outerVerts.push([brX - bevel, brZ]);
-                outerEdgeExposed.push(true);  // Concave notch diagonal
-                outerVerts.push([brX, brZ + bevel]);
-                outerEdgeExposed.push(bevelRight);  // Right edge
+                outerVerts.push([brX, brZ]);
+                outerEdgeExposed.push(true);
+                outerVerts.push([brX, brZ]);
+                outerEdgeExposed.push(true);
             } else {
                 outerVerts.push([brX, brZ]);
                 outerEdgeExposed.push(bevelRight);  // Right edge
@@ -713,11 +714,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                     outerEdgeExposed.push(true);  // Front edge starts here
                 }
             } else if (cornerFrontRight) {
-                // Concave corner: notch diagonal is exposed
-                outerVerts.push([frX, frZ - bevel]);
-                outerEdgeExposed.push(true);  // Concave notch diagonal
-                outerVerts.push([frX - bevel, frZ]);
-                outerEdgeExposed.push(bevelFront);  // Front edge
+                outerVerts.push([frX, frZ]);
+                outerEdgeExposed.push(true);
+                outerVerts.push([frX, frZ]);
+                outerEdgeExposed.push(true);
             } else {
                 outerVerts.push([frX, frZ]);
                 outerEdgeExposed.push(bevelFront);  // Front edge
@@ -735,10 +735,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                 }
             } else if (cornerFrontLeft) {
                 // Concave corner: notch diagonal is exposed
-                outerVerts.push([flX + bevel, flZ]);
-                outerEdgeExposed.push(true);  // Concave notch diagonal
-                outerVerts.push([flX, flZ - bevel]);
-                outerEdgeExposed.push(bevelLeft);  // Left edge (wraps to start)
+                outerVerts.push([flX, flZ]);
+                outerEdgeExposed.push(true);
+                outerVerts.push([flX, flZ]);
+                outerEdgeExposed.push(true);
             } else {
                 outerVerts.push([flX, flZ]);
                 outerEdgeExposed.push(bevelLeft);  // Left edge (wraps to start)
@@ -778,10 +778,21 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                 addVertex(inner1[0], innerTopY, inner1[1], 0, 1, 0, parsedColor);
                 addVertex(inner2[0], innerTopY, inner2[1], 0, 1, 0, parsedColor);
                 // Outer vertices: normal points sideways (blends to side face)
-                addVertex(outer2[0], outerTopY, outer2[1], sideNx, 0, sideNz, parsedColor);
-                addVertex(outer1[0], outerTopY, outer1[1], sideNx, 0, sideNz, parsedColor);
-                indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
-                indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
+                if (dx === 0 && dz === 0) {
+                    // This is a concave corner. Create a single outer vertex and a triangular top.
+                    const dx1 = Math.sign(outer1[0] - inner1[0]);
+                    const dz1 = Math.sign(outer1[1] - inner1[1]);
+                    const dx2 = Math.sign(outer2[0] - inner2[0]);
+                    const dz2 = Math.sign(outer2[1] - inner2[1]);
+                    const is2 = 1/Math.sqrt(2);
+                    addVertex(outer1[0], outerTopY, outer1[1], is2*(dx1+dx2), 0, is2*(dz1 + dz2), parsedColor);
+                    indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
+                } else {
+                    addVertex(outer2[0], outerTopY, outer2[1], sideNx, 0, sideNz, parsedColor);
+                    addVertex(outer1[0], outerTopY, outer1[1], sideNx, 0, sideNz, parsedColor);
+                    indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
+                    indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
+                }
             }
 
             // ===== VERTICAL SIDES =====
@@ -796,6 +807,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
                 const dx = t2[0] - t1[0];
                 const dz = t2[1] - t1[1];
+                if (dx === 0 && dz === 0) continue;  // Skip degenerate edges
                 const len = Math.sqrt(dx * dx + dz * dz);
                 const nx = dz / len;
                 const nz = -dx / len;
@@ -829,14 +841,28 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                 const sideNz = -dx / len;
 
                 const bevelStartIdx = positions.length / 3;
-                // Outer vertices: normal points sideways (blends from side face)
-                addVertex(outer1[0], outerBotY, outer1[1], sideNx, 0, sideNz, parsedColor);
-                addVertex(outer2[0], outerBotY, outer2[1], sideNx, 0, sideNz, parsedColor);
-                // Inner vertices: normal points down (blends to bottom face)
-                addVertex(inner2[0], innerBotY, inner2[1], 0, -1, 0, parsedColor);
-                addVertex(inner1[0], innerBotY, inner1[1], 0, -1, 0, parsedColor);
-                indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
-                indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
+                if (dx === 0 && dz === 0) {
+                    // This is a concave corner. Create a single outer vertex and a triangular top.
+                    const dx1 = Math.sign(outer1[0] - inner1[0]);
+                    const dz1 = Math.sign(outer1[1] - inner1[1]);
+                    const dx2 = Math.sign(outer2[0] - inner2[0]);
+                    const dz2 = Math.sign(outer2[1] - inner2[1]);
+                    const is2 = 1/Math.sqrt(2);
+                    addVertex(outer1[0], outerTopY, outer1[1], is2*(dx1+dx2), 0, is2*(dz1 + dz2), parsedColor);
+                    // Inner vertices: normal points down (blends to bottom face)
+                    addVertex(inner2[0], innerBotY, inner2[1], 0, -1, 0, parsedColor);
+                    addVertex(inner1[0], innerBotY, inner1[1], 0, -1, 0, parsedColor);
+                    indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
+                } else {
+                    // Outer vertices: normal points sideways (blends from side face)
+                    addVertex(outer1[0], outerTopY, outer1[1], sideNx, 0, sideNz, parsedColor);
+                    addVertex(outer2[0], outerTopY, outer2[1], sideNx, 0, sideNz, parsedColor);
+                    // Inner vertices: normal points down (blends to bottom face)
+                    addVertex(inner2[0], innerBotY, inner2[1], 0, -1, 0, parsedColor);
+                    addVertex(inner1[0], innerBotY, inner1[1], 0, -1, 0, parsedColor);
+                    indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
+                    indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
+                }
             }
 
             // ===== INNER BOTTOM FACE =====
