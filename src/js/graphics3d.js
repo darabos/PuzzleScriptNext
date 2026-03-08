@@ -511,8 +511,6 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     const bevel = CUBE_SIZE * 0.25;  // Bevel size for rounding
     const uvScale = 0.1;  // Scale factor for UV tiling
 
-    let vertexOffset = 0;
-
     // Helper to add a vertex with UV based on position
     function addVertex(x, y, z, nx, ny, nz, color) {
         positions.push(x, y, z);
@@ -527,17 +525,6 @@ function getOrCreateSpriteGeometry(spriteIndex) {
         const u = (x + y) * uvScale;
         const v = (z + y) * uvScale;
         uvs.push(u, v);
-    }
-
-    // Helper to add a triangle
-    function addTriangle(v0, v1, v2) {
-        indices.push(vertexOffset + v0, vertexOffset + v1, vertexOffset + v2);
-    }
-
-    // Helper to add a quad (two triangles)
-    function addQuad(v0, v1, v2, v3) {
-        indices.push(vertexOffset + v0, vertexOffset + v1, vertexOffset + v2);
-        indices.push(vertexOffset + v0, vertexOffset + v2, vertexOffset + v3);
     }
 
     for (let py = 0; py < spriteHeight; py++) {
@@ -624,6 +611,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             if (cornerBackLeft && (bevelLeft || bevelBack)) {
                 if (bevelLeft) innerVerts.push([blX + blBevelX, blZ + blBevelZ + bevel]);
                 if (bevelBack) innerVerts.push([blX + blBevelX + bevel, blZ + blBevelZ]);
+            } else if (cornerBackLeft) {
+                // Concave corner: both edge neighbors present, diagonal empty
+                innerVerts.push([blX, blZ + bevel]);
+                innerVerts.push([blX + bevel, blZ]);
             } else {
                 innerVerts.push([blX + blBevelX, blZ + blBevelZ]);
             }
@@ -632,6 +623,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             if (cornerBackRight && (bevelRight || bevelBack)) {
                 if (bevelBack) innerVerts.push([brX + brBevelX - bevel, brZ + brBevelZ]);
                 if (bevelRight) innerVerts.push([brX + brBevelX, brZ + brBevelZ + bevel]);
+            } else if (cornerBackRight) {
+                // Concave corner: both edge neighbors present, diagonal empty
+                innerVerts.push([brX - bevel, brZ]);
+                innerVerts.push([brX, brZ + bevel]);
             } else {
                 innerVerts.push([brX + brBevelX, brZ + brBevelZ]);
             }
@@ -640,6 +635,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             if (cornerFrontRight && (bevelRight || bevelFront)) {
                 if (bevelRight) innerVerts.push([frX + frBevelX, frZ + frBevelZ - bevel]);
                 if (bevelFront) innerVerts.push([frX + frBevelX - bevel, frZ + frBevelZ]);
+            } else if (cornerFrontRight) {
+                // Concave corner: both edge neighbors present, diagonal empty
+                innerVerts.push([frX, frZ - bevel]);
+                innerVerts.push([frX - bevel, frZ]);
             } else {
                 innerVerts.push([frX + frBevelX, frZ + frBevelZ]);
             }
@@ -648,6 +647,10 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             if (cornerFrontLeft && (bevelLeft || bevelFront)) {
                 if (bevelFront) innerVerts.push([flX + flBevelX + bevel, flZ + flBevelZ]);
                 if (bevelLeft) innerVerts.push([flX + flBevelX, flZ + flBevelZ - bevel]);
+            } else if (cornerFrontLeft) {
+                // Concave corner: both edge neighbors present, diagonal empty
+                innerVerts.push([flX + bevel, flZ]);
+                innerVerts.push([flX, flZ - bevel]);
             } else {
                 innerVerts.push([flX + flBevelX, flZ + flBevelZ]);
             }
@@ -667,6 +670,12 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                     outerVerts.push([blX + bevel, blZ]);
                     outerEdgeExposed.push(true);  // Back edge starts here
                 }
+            } else if (cornerBackLeft) {
+                // Concave corner: notch diagonal is exposed
+                outerVerts.push([blX, blZ + bevel]);
+                outerEdgeExposed.push(true);  // Concave notch diagonal
+                outerVerts.push([blX + bevel, blZ]);
+                outerEdgeExposed.push(bevelBack);  // Back edge
             } else {
                 outerVerts.push([blX, blZ]);
                 outerEdgeExposed.push(bevelBack);  // Back edge
@@ -682,6 +691,12 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                     outerVerts.push([brX, brZ + bevel]);
                     outerEdgeExposed.push(true);  // Right edge starts here
                 }
+            } else if (cornerBackRight) {
+                // Concave corner: notch diagonal is exposed
+                outerVerts.push([brX - bevel, brZ]);
+                outerEdgeExposed.push(true);  // Concave notch diagonal
+                outerVerts.push([brX, brZ + bevel]);
+                outerEdgeExposed.push(bevelRight);  // Right edge
             } else {
                 outerVerts.push([brX, brZ]);
                 outerEdgeExposed.push(bevelRight);  // Right edge
@@ -697,6 +712,12 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                     outerVerts.push([frX - bevel, frZ]);
                     outerEdgeExposed.push(true);  // Front edge starts here
                 }
+            } else if (cornerFrontRight) {
+                // Concave corner: notch diagonal is exposed
+                outerVerts.push([frX, frZ - bevel]);
+                outerEdgeExposed.push(true);  // Concave notch diagonal
+                outerVerts.push([frX - bevel, frZ]);
+                outerEdgeExposed.push(bevelFront);  // Front edge
             } else {
                 outerVerts.push([frX, frZ]);
                 outerEdgeExposed.push(bevelFront);  // Front edge
@@ -712,6 +733,12 @@ function getOrCreateSpriteGeometry(spriteIndex) {
                     outerVerts.push([flX, flZ - bevel]);
                     outerEdgeExposed.push(true);  // Left edge (wraps to start)
                 }
+            } else if (cornerFrontLeft) {
+                // Concave corner: notch diagonal is exposed
+                outerVerts.push([flX + bevel, flZ]);
+                outerEdgeExposed.push(true);  // Concave notch diagonal
+                outerVerts.push([flX, flZ - bevel]);
+                outerEdgeExposed.push(bevelLeft);  // Left edge (wraps to start)
             } else {
                 outerVerts.push([flX, flZ]);
                 outerEdgeExposed.push(bevelLeft);  // Left edge (wraps to start)
