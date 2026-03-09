@@ -355,12 +355,12 @@ function updateCameraPosition() {
     if (!camera3d || !scene3d) return;
 
     // Calculate camera position in spherical coordinates
-    const x = cameraDistance * Math.sin(cameraAngleY);
-    const y = cameraDistance * Math.sin(cameraAngleX) * Math.cos(cameraAngleY);
-    const z = cameraDistance * Math.cos(cameraAngleX);
+    const x = cameraDistance * Math.sin(cameraAngleY) * Math.cos(cameraAngleX);
+    const y = cameraDistance * Math.sin(cameraAngleX);
+    const z = cameraDistance * Math.cos(cameraAngleY) * Math.cos(cameraAngleX);
 
     camera3d.position.set(x, y, z);
-    camera3d.up.set(0, 0, -1);
+    camera3d.up.set(0, 1, 0);
     camera3d.lookAt(0, 0, 0);
 }
 
@@ -390,8 +390,8 @@ function onMouseMove3D(e) {
     cameraAngleX += deltaY * ORBIT_SENSITIVITY;
 
     // Clamp vertical angle to prevent flipping
-    const MIN_ANGLE = 0.1;
-    const MAX_ANGLE = Math.PI - 0.1;
+    const MIN_ANGLE = 0;
+    const MAX_ANGLE = Math.PI/2 - 0.1;
     cameraAngleX = Math.max(MIN_ANGLE, Math.min(MAX_ANGLE, cameraAngleX));
 
     lastMouseX = e.clientX;
