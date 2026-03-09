@@ -295,8 +295,13 @@ function strip_http(url) {
 
 function getData() { 
     const p = getParameterByName("p");
-    if (p.includes("itch.io")) {
+    if (p.match(/https:\/\/[^/]*\.itch\.io/)) {
         fetchPuzzleScriptFromItch(p)
+            .then(source => prepareForPlay(`hack=${encodeURIComponent(p)}`, source))
+            .catch(error => displayError(error.message));
+        return;
+    } else if (p.startsWith("http://") || p.startsWith("https://")) {
+        fetchPuzzleScriptFromUrl(p)
             .then(source => prepareForPlay(`hack=${encodeURIComponent(p)}`, source))
             .catch(error => displayError(error.message));
         return;
@@ -393,6 +398,18 @@ async function fetchPuzzleScriptFromItch(itchUrl) {
     const puzzleScriptSource = unescapeJSString(escapedSource);
 
     return puzzleScriptSource;
+}
+
+/**
+ * Fetches PuzzleScript source code from a direct link to a source code file.
+ */
+async function fetchPuzzleScriptFromUrl(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch source code: ${response.status} ${response.statusText}`);
+    }
+    const source = await response.text();
+    return source;
 }
 
 /**

@@ -21,7 +21,7 @@ window.addEventListener('load', function () {
 		editor.setValue("loading url...");
 		tryLoadFile(file);
 	} else if (file = getParameterByName("hack")) {
-		if (file.includes("itch.io")) {
+		if (file.match(/https:\/\/[^/]*\.itch\.io/)) {
 			editor.setValue("loading from itch.io page...");
 			fetchPuzzleScriptFromItch(file)
 				.then(puzzleScriptSource => {
@@ -30,6 +30,16 @@ window.addEventListener('load', function () {
 				.catch(error => {
 					consoleError("Failed to load from itch.io: " + error.message);
 					editor.setValue("Failed to load from itch.io: " + error.message);
+				});
+		} else if (file.startsWith("http://") || file.startsWith("https://")) {
+			editor.setValue("loading from URL...");
+			fetchPuzzleScriptFromUrl(file)
+				.then(puzzleScriptSource => {
+					loadGame(puzzleScriptSource);
+				})
+				.catch(error => {
+					consoleError("Failed to load from URL: " + error.message);
+					editor.setValue("Failed to load from URL: " + error.message);
 				});
 		} else {
 			editor.setValue("loading gist...");
@@ -130,6 +140,18 @@ async function fetchPuzzleScriptFromItch(itchUrl) {
     const puzzleScriptSource = unescapeJSString(escapedSource);
 
     return puzzleScriptSource;
+}
+
+/**
+ * Fetches PuzzleScript source code from a direct link to a source code file.
+ */
+async function fetchPuzzleScriptFromUrl(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch source code: ${response.status} ${response.statusText}`);
+    }
+    const source = await response.text();
+    return source;
 }
 
 /**
